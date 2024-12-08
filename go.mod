@@ -1,6 +1,6 @@
 module github.com/go-cart-ecommerce/sdk-ts-gen
 
-go 1.22.3
+go 1.22
 
 require github.com/getkin/kin-openapi v0.128.0
 
