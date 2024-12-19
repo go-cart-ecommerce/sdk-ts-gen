@@ -580,7 +580,7 @@ func generateMethod(doc *openapi3.T, methodName, httpMethod, path string, method
 			for _, pp := range pageParams {
 				camelPP := toCamelCase(pp.Name)
 				buf.WriteString(fmt.Sprintf("      if (%s.page.%s !== undefined && %s.page.%s !== null) {\n", paramName, camelPP, paramName, camelPP))
-				buf.WriteString(fmt.Sprintf("        queryString.append('%s', String(%s.page.%s));\n", pp.Name, paramName, camelPP))
+				buf.WriteString(fmt.Sprintf("        queryString.append('page[%s]', String(%s.page.%s));\n", pp.Name, paramName, camelPP))
 				buf.WriteString("      }\n")
 			}
 			buf.WriteString("    }\n")
