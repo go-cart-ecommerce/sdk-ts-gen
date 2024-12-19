@@ -65,7 +65,7 @@ func main() {
 	writeFile(filepath.Join(srcDir, "types.ts"), typesBytes)
 	writeFile(filepath.Join(srcDir, "params.ts"), paramBytes)
 
-	log.Printf("Generated TypeScript SDK in %s\n", outputDir)
+	log.Printf("Hey! Generated TypeScript SDK in %s\n", outputDir)
 }
 
 func writeFile(path string, data []byte) {

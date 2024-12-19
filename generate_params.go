@@ -19,7 +19,6 @@ func generateParams(doc *openapi3.T) []byte {
 
 	// Iterate over all paths in matching order
 	for _, path := range doc.Paths.InMatchingOrder() {
-
 		pathItem := doc.Paths.Find(path)
 
 		// Iterate over all operations in the path
@@ -39,7 +38,7 @@ func generateParams(doc *openapi3.T) []byte {
 			queryParams := extractQueryParameters(operation)
 
 			// Process parameters into TypeScript interface
-			tsInterface, additionalTypes := generateTypeScriptInterface(interfaceName, queryParams, doc)
+			tsInterface, additionalTypes := generateTypeScriptInterface(interfaceName, queryParams, operation, doc)
 
 			// Collect all additional TypeScript types (e.g., enums)
 			allAdditionalTypes = append(allAdditionalTypes, additionalTypes...)
@@ -96,7 +95,7 @@ func extractQueryParameters(operation *openapi3.Operation) []Parameter {
 }
 
 // generateTypeScriptInterface generates the TypeScript interface for parameters
-func generateTypeScriptInterface(interfaceName string, params []Parameter, doc *openapi3.T) (string, []string) {
+func generateTypeScriptInterface(interfaceName string, params []Parameter, operation *openapi3.Operation, doc *openapi3.T) (string, []string) {
 	var buf bytes.Buffer
 	var additionalTypes []string
 
@@ -150,6 +149,14 @@ func generateTypeScriptInterface(interfaceName string, params []Parameter, doc *
 		buf.WriteString(fmt.Sprintf("  %s?: %s;\n\n", toCamelCase(groupName), nestedType))
 	}
 
+	if strings.HasPrefix(operation.OperationID, "list") {
+		// Add to main interface
+		buf.WriteString("  /**\n")
+		buf.WriteString("   * Include the count of total items in the collection.\n")
+		buf.WriteString("   */\n")
+		buf.WriteString("  totalCount?: boolean;\n")
+	}
+
 	// Close interface
 	buf.WriteString("}\n")
 
@@ -191,6 +198,7 @@ func extractEnumValues(groupName string, params []Parameter) []string {
 				}
 			}
 		} else {
+			// TODO: fix this
 			// Handle 'include' parameter without explicit enum by inferring from predefined values
 			if groupName == "include" {
 				enumValues = []string{"'parent'", "'parents'", "'children'", "'attributes'"}

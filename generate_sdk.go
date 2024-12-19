@@ -50,7 +50,13 @@ func (m methodParams) GetPayloadParam() (methodParam, bool) {
 func generateSDK(doc *openapi3.T) []byte {
 	// Prepare to collect all TypeScript methods and types
 	var tsBuffer bytes.Buffer
-	var methodsBuffer bytes.Buffer
+
+	// We'll store the methods in a slice for sorting by method name
+	type generatedMethod struct {
+		Name string
+		Code string
+	}
+	var allMethods []generatedMethod
 
 	// Sets to store unique TypeScript types to import
 	typeSet := make(map[string]struct{})
@@ -107,11 +113,11 @@ func generateSDK(doc *openapi3.T) []byte {
 			case "POST", "PUT":
 				if hasRequestBody {
 					paramTypeName := requestType
-					methodParamsList = append(methodParamsList, methodParam{Name: "req", Type: paramTypeName}) // e.g., CreateProductTypeRequest
+					methodParamsList = append(methodParamsList, methodParam{Name: "req", Type: paramTypeName})
 					typeSet[paramTypeName] = struct{}{}
 				} else {
 					// Fallback if no request body is present
-					paramTypeName := toPascalCase(methodName) + "Params" // e.g., UpdateProductTypeParams
+					paramTypeName := toPascalCase(methodName) + "Params"
 					methodParamsList = append(methodParamsList, methodParam{Name: "params", Type: paramTypeName})
 					paramsSet[paramTypeName] = struct{}{}
 				}
@@ -129,7 +135,7 @@ func generateSDK(doc *openapi3.T) []byte {
 				if !strings.Contains(methodName, "list") {
 					methodParamsList = append(methodParamsList, methodParam{Name: "id", Type: "string"})
 				}
-				paramTypeName := toPascalCase(methodName) + "Params" // e.g., ListCategoriesParams
+				paramTypeName := toPascalCase(methodName) + "Params"
 				methodParamsList = append(methodParamsList, methodParam{Name: "params", Type: paramTypeName})
 				paramsSet[paramTypeName] = struct{}{}
 			default:
@@ -155,10 +161,18 @@ func generateSDK(doc *openapi3.T) []byte {
 
 			// Generate method
 			methodCode := generateMethod(doc, methodName, method, path, methodParamsList, responseType, queryParams)
-			methodsBuffer.WriteString(methodCode)
-			methodsBuffer.WriteString("\n")
+
+			allMethods = append(allMethods, generatedMethod{
+				Name: methodName,
+				Code: methodCode,
+			})
 		}
 	}
+
+	// Sort methods alphabetically by method name
+	sort.Slice(allMethods, func(i, j int) bool {
+		return allMethods[i].Name < allMethods[j].Name
+	})
 
 	// Generate import statements with collected types
 	importTypes := []string{}
@@ -177,7 +191,6 @@ func generateSDK(doc *openapi3.T) []byte {
 	}
 	sort.Strings(importParams)
 
-	// Write to tsBuffer
 	tsBuffer.WriteString("// Auto-generated TypeScript SDK\n")
 	tsBuffer.WriteString("// Do not modify manually.\n\n")
 
@@ -202,10 +215,7 @@ func generateSDK(doc *openapi3.T) []byte {
 		tsBuffer.WriteString("} from './params';\n")
 	}
 
-	tsBuffer.WriteString("import { toApiType, toClientType } from './utils';\n")
-
-	// Add a newline after imports
-	tsBuffer.WriteString("\n")
+	tsBuffer.WriteString("import { toApiType, toClientType } from './utils';\n\n")
 
 	// Start GoCartSDK class
 	tsBuffer.WriteString("export class GoCartSDK {\n")
@@ -214,8 +224,11 @@ func generateSDK(doc *openapi3.T) []byte {
 	tsBuffer.WriteString("    this.baseUrl = baseUrl;\n")
 	tsBuffer.WriteString("  }\n\n")
 
-	// Append all methods
-	tsBuffer.Write(methodsBuffer.Bytes())
+	// Append all sorted methods
+	for _, m := range allMethods {
+		tsBuffer.WriteString(m.Code)
+		tsBuffer.WriteString("\n")
+	}
 
 	// Close GoCartSDK class
 	tsBuffer.WriteString("}\n")
@@ -460,7 +473,7 @@ func generateMethod(doc *openapi3.T, methodName, httpMethod, path string, method
 		}
 
 		// Initialize options for fetch
-		buf.WriteString("    const options: RequestInit = {\n")
+		buf.WriteString("    let options: RequestInit = {\n")
 		buf.WriteString(fmt.Sprintf("      method: '%s',\n", strings.ToUpper(httpMethod)))
 		buf.WriteString("      headers: {\n")
 		buf.WriteString("        'Content-Type': 'application/json',\n")
@@ -472,7 +485,7 @@ func generateMethod(doc *openapi3.T, methodName, httpMethod, path string, method
 		}
 	} else {
 		// Initialize options for fetch
-		buf.WriteString("    const options: RequestInit = {\n")
+		buf.WriteString("    let options: RequestInit = {\n")
 		buf.WriteString(fmt.Sprintf("      method: '%s',\n", strings.ToUpper(httpMethod)))
 		buf.WriteString("      headers: {\n")
 		buf.WriteString("        'Content-Type': 'application/json',\n")
@@ -481,6 +494,15 @@ func generateMethod(doc *openapi3.T, methodName, httpMethod, path string, method
 	}
 
 	buf.WriteString("    };\n")
+
+	if strings.HasPrefix(methodName, "list") {
+		buf.WriteString("    if (params.totalCount) {\n")
+		buf.WriteString("      options.headers = {\n")
+		buf.WriteString("        ...options.headers,\n")
+		buf.WriteString("        'Collection-Total': 'include'\n")
+		buf.WriteString("      }\n")
+		buf.WriteString("    }\n")
+	}
 
 	// Handle query parameters (only for methods that can have query params, typically GET, DELETE)
 	// Assuming that methods with 'params' can have query parameters
@@ -626,15 +648,28 @@ func getRefName(ref string) string {
 }
 
 // toCamelCase converts snake_case or any_case to camelCase
+// toCamelCase converts a string to camelCase
 func toCamelCase(input string) string {
+	if input == "" {
+		return ""
+	}
+
+	// remove leading _ if exists
+	if input[0] == '_' {
+		input = input[1:]
+	}
+
 	parts := strings.Split(input, "_")
 	for i, part := range parts {
 		if i == 0 {
+			// Ensure the first part is lowercase
 			parts[i] = strings.ToLower(part)
 		} else {
+			// Title case for subsequent parts
 			parts[i] = strings.Title(part)
 		}
 	}
+
 	return strings.Join(parts, "")
 }
 
