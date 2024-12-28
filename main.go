@@ -49,9 +49,12 @@ func main() {
 	}
 
 	// Generate code
-	sdkBytes := generateSDK(doc)
-	typesBytes := generateTypes(doc)
-	paramBytes := generateParams(doc)
+	typeDefinitions := getTypeDefinitions(doc)
+	paramDefinitions := getParamDefinitions(doc)
+
+	sdkBytes := generateSDK(doc, typeDefinitions, paramDefinitions)
+	typesBytes := generateTypes(doc, typeDefinitions)
+	paramBytes := generateParams(doc, paramDefinitions)
 
 	// Ensure output directory structure
 	srcDir := filepath.Join(outputDir)

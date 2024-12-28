@@ -11,6 +11,93 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 )
 
+// QueryParameter represents a simplified parameter structure
+type QueryParameter struct {
+	Name        string
+	In          string
+	Description string
+	Schema      *openapi3.SchemaRef
+	Required    bool
+}
+
+type MethodDefinition struct {
+	Name            string
+	Arguments       MethodArgumentDefinitions
+	ResponseType    string
+	HTTPMethod      string
+	Path            string
+	QueryParams     map[string][]QueryParameter
+	OperationRef    *openapi3.Operation
+	ResponseTypeRef *openapi3.SchemaRef
+}
+
+type MethodDefinitions []MethodDefinition
+
+func (m MethodDefinitions) HasMethod(name string) bool {
+	for _, p := range m {
+		if p.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (m MethodDefinitions) GetMethod(name string) (MethodDefinition, bool) {
+	for _, p := range m {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return MethodDefinition{}, false
+}
+
+func (m MethodDefinitions) UseType(typeName string) bool {
+	for _, p := range m {
+		for _, arg := range p.Arguments {
+			if arg.Type.Name == typeName {
+				return true
+			}
+		}
+
+		if p.ResponseType == typeName {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (m MethodDefinitions) Sort() {
+	sort.Slice(m, func(i, j int) bool {
+		return m[i].Name < m[j].Name
+	})
+}
+
+type MethodArgumentDefinition struct {
+	Name string
+	Type TypeDefinition
+}
+
+type MethodArgumentDefinitions []MethodArgumentDefinition
+
+func (m MethodArgumentDefinitions) HasParam(name string) bool {
+	for _, p := range m {
+		if p.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (m MethodArgumentDefinitions) GetPayloadParam() (MethodArgumentDefinition, bool) {
+	for _, p := range m {
+		if p.Name == "req" {
+			return p, true
+		}
+	}
+	return MethodArgumentDefinition{}, false
+}
+
 // TypeMapping maps OpenAPI types to TypeScript types
 var typeMapping = map[string]string{
 	"integer": "number",
@@ -22,45 +109,8 @@ var typeMapping = map[string]string{
 	"null":    "null",
 }
 
-type methodParam struct {
-	Name string
-	Type string
-}
-
-type methodParams []methodParam
-
-func (m methodParams) HasParam(name string) bool {
-	for _, p := range m {
-		if p.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
-func (m methodParams) GetPayloadParam() (methodParam, bool) {
-	for _, p := range m {
-		if p.Name == "req" {
-			return p, true
-		}
-	}
-	return methodParam{}, false
-}
-
-func generateSDK(doc *openapi3.T) []byte {
-	// Prepare to collect all TypeScript methods and types
-	var tsBuffer bytes.Buffer
-
-	// We'll store the methods in a slice for sorting by method name
-	type generatedMethod struct {
-		Name string
-		Code string
-	}
-	var allMethods []generatedMethod
-
-	// Sets to store unique TypeScript types to import
-	typeSet := make(map[string]struct{})
-	paramsSet := make(map[string]struct{})
+func getMethodDefinitions(doc *openapi3.T) MethodDefinitions {
+	var methodDefinitions MethodDefinitions
 
 	// Iterate over all paths
 	for _, path := range doc.Paths.InMatchingOrder() {
@@ -81,116 +131,136 @@ func generateSDK(doc *openapi3.T) []byte {
 				continue
 			}
 
+			// Determine method name
+			methodName := generateMethodName(operation, method, path)
+
 			// Determine if the method has a request body
-			hasRequestBody := false
+			// isReferencingResponseType := false
 			var requestType string
 			if operation.RequestBody != nil && operation.RequestBody.Value != nil {
 				content := operation.RequestBody.Value.Content
 				if appJSON, ok := content["application/json"]; ok && appJSON.Schema != nil {
 					if appJSON.Schema.Ref != "" {
 						requestType = toPascalCase(getRefName(appJSON.Schema.Ref))
+						// isReferencingResponseType = true
 					} else {
 						// Handle inline schemas or other types
-						requestType = resolveInlineType(appJSON.Schema, typeSet)
+						requestType = toPascalCase(methodName) + "Request"
 					}
-					if !isPrimitiveType(requestType) && requestType != "any" {
-						typeSet[requestType] = struct{}{}
+
+				}
+
+				if appFormData, ok := content["multipart/form-data"]; ok && appFormData.Schema != nil {
+					if appFormData.Schema.Ref != "" {
+						requestType = toPascalCase(getRefName(appFormData.Schema.Ref))
+						// isReferencingResponseType = true
+					} else {
+						// Handle inline schemas or other types
+						requestType = toPascalCase(methodName) + "Request"
 					}
-					hasRequestBody = true
 				}
 			}
-
-			// Determine method name
-			methodName := generateMethodName(operation, method, path)
 
 			// Extract parameters
 			queryParams := extractParameters(operation)
 
-			var methodParamsList methodParams
+			var methodArgumentList MethodArgumentDefinitions
 
 			// Determine parameter type and name based on HTTP method
 			switch strings.ToUpper(method) {
-			case "POST", "PUT":
-				if hasRequestBody {
-					paramTypeName := requestType
-					methodParamsList = append(methodParamsList, methodParam{Name: "req", Type: paramTypeName})
-					typeSet[paramTypeName] = struct{}{}
-				} else {
-					// Fallback if no request body is present
-					paramTypeName := toPascalCase(methodName) + "Params"
-					methodParamsList = append(methodParamsList, methodParam{Name: "params", Type: paramTypeName})
-					paramsSet[paramTypeName] = struct{}{}
-				}
-			case "PATCH":
+			case "POST":
+				methodArgumentList = append(methodArgumentList, MethodArgumentDefinition{
+					Name: "req",
+					Type: TypeDefinition{
+						Name: requestType,
+					},
+				})
+			case "PATCH", "PUT":
 				// Assume PATCH methods have an 'id' parameter and a request body
-				methodParamsList = append(methodParamsList, methodParam{Name: "id", Type: "string"})
-				paramTypeName := requestType
-				methodParamsList = append(methodParamsList, methodParam{Name: "req", Type: paramTypeName})
-				typeSet[paramTypeName] = struct{}{}
+				methodArgumentList = append(methodArgumentList, MethodArgumentDefinition{
+					Name: "id",
+					Type: TypeDefinition{
+						Name: "string",
+					},
+				}, MethodArgumentDefinition{
+					Name: "req",
+					Type: TypeDefinition{
+						Name: requestType,
+					},
+				})
+
 			case "DELETE":
 				// Assume DELETE methods only have a single string parameter
-				methodParamsList = append(methodParamsList, methodParam{Name: "id", Type: "string"})
+				methodArgumentList = append(methodArgumentList, MethodArgumentDefinition{
+					Name: "id",
+					Type: TypeDefinition{
+						Name: "string",
+					},
+				})
 			case "GET":
 				// check if it is getOne or getAll
 				if !strings.Contains(methodName, "list") {
-					methodParamsList = append(methodParamsList, methodParam{Name: "id", Type: "string"})
+					methodArgumentList = append(methodArgumentList, MethodArgumentDefinition{
+						Name: "id",
+						Type: TypeDefinition{
+							Name: "string",
+						},
+					})
 				}
 				paramTypeName := toPascalCase(methodName) + "Params"
-				methodParamsList = append(methodParamsList, methodParam{Name: "params", Type: paramTypeName})
-				paramsSet[paramTypeName] = struct{}{}
+				methodArgumentList = append(methodArgumentList, MethodArgumentDefinition{
+					Name: "params",
+					Type: TypeDefinition{
+						Name: paramTypeName,
+					},
+				})
 			default:
 				fmt.Println("unsupported method:", method)
 			}
 
-			// Collect parameter types (for GET, DELETE, etc.)
-			if methodParamsList.HasParam("params") && queryParams["query"] != nil {
-				for _, p := range queryParams["query"] {
-					// If the query parameter references a schema, add it to paramsSet
-					if p.Schema != nil && p.Schema.Ref != "" {
-						tsType := toPascalCase(getRefName(p.Schema.Ref))
-						paramsSet[tsType] = struct{}{}
-					}
-				}
-			}
-
 			// Determine response type
-			responseType := determineResponseType(operation, typeSet)
-			if !isPrimitiveType(responseType) && !isArrayType(responseType) && responseType != "any" {
-				typeSet[responseType] = struct{}{}
-			}
+			responseType, ResponseTypeRef := determineResponseType(operation)
 
-			// Generate method
-			methodCode := generateMethod(doc, methodName, method, path, methodParamsList, responseType, queryParams)
-
-			allMethods = append(allMethods, generatedMethod{
-				Name: methodName,
-				Code: methodCode,
+			methodDefinitions = append(methodDefinitions, MethodDefinition{
+				Name:            methodName,
+				HTTPMethod:      method,
+				Path:            path,
+				Arguments:       methodArgumentList,
+				ResponseType:    responseType,
+				QueryParams:     queryParams,
+				OperationRef:    operation,
+				ResponseTypeRef: ResponseTypeRef,
 			})
 		}
 	}
 
-	// Sort methods alphabetically by method name
-	sort.Slice(allMethods, func(i, j int) bool {
-		return allMethods[i].Name < allMethods[j].Name
-	})
+	methodDefinitions.Sort()
+
+	return methodDefinitions
+}
+
+func generateSDK(doc *openapi3.T, typeDefinitions []TypeDefinition, paramDefinitions []ParamDefinition) []byte {
+	methodDefinitions := getMethodDefinitions(doc)
 
 	// Generate import statements with collected types
 	importTypes := []string{}
-	for tsType := range typeSet {
-		if !isPrimitiveType(tsType) && !isArrayType(tsType) && tsType != "any" {
-			importTypes = append(importTypes, tsType)
+	for _, m := range typeDefinitions {
+		if !isPrimitiveType(m.Name) && !isArrayType(m.Name) && methodDefinitions.UseType(m.Name) {
+			importTypes = append(importTypes, m.Name)
 		}
 	}
 	sort.Strings(importTypes)
 
 	importParams := []string{}
-	for tsType := range paramsSet {
-		if !isPrimitiveType(tsType) && !isArrayType(tsType) && tsType != "any" {
-			importParams = append(importParams, tsType)
+	for _, m := range paramDefinitions {
+		if !isPrimitiveType(m.Name) && !isArrayType(m.Name) && methodDefinitions.UseType(m.Name) {
+			importParams = append(importParams, m.Name)
 		}
 	}
 	sort.Strings(importParams)
 
+	// Prepare to collect all TypeScript methods and types
+	var tsBuffer bytes.Buffer
 	tsBuffer.WriteString("// Auto-generated TypeScript SDK\n")
 	tsBuffer.WriteString("// Do not modify manually.\n\n")
 
@@ -212,7 +282,7 @@ func generateSDK(doc *openapi3.T) []byte {
 		for _, tsType := range importParams {
 			tsBuffer.WriteString(fmt.Sprintf("  %s,\n", tsType))
 		}
-		tsBuffer.WriteString("} from './params';\n")
+		tsBuffer.WriteString("} from './params';\n\n")
 	}
 
 	tsBuffer.WriteString("import { toApiType, toClientType } from './utils';\n\n")
@@ -224,9 +294,9 @@ func generateSDK(doc *openapi3.T) []byte {
 	tsBuffer.WriteString("    this.baseUrl = baseUrl;\n")
 	tsBuffer.WriteString("  }\n\n")
 
-	// Append all sorted methods
-	for _, m := range allMethods {
-		tsBuffer.WriteString(m.Code)
+	for _, m := range methodDefinitions {
+		mthodCode := generateMethod(doc, m)
+		tsBuffer.WriteString(mthodCode)
 		tsBuffer.WriteString("\n")
 	}
 
@@ -246,15 +316,15 @@ func generateMethodName(operation *openapi3.Operation, method, path string) stri
 }
 
 // extractParameters separates path, query, and body parameters
-func extractParameters(operation *openapi3.Operation) map[string][]Parameter {
-	groupedParams := make(map[string][]Parameter)
+func extractParameters(operation *openapi3.Operation) map[string][]QueryParameter {
+	groupedParams := make(map[string][]QueryParameter)
 
 	for _, paramRef := range operation.Parameters {
 		if paramRef == nil || paramRef.Value == nil {
 			continue
 		}
 		param := paramRef.Value
-		p := Parameter{
+		p := QueryParameter{
 			Name:        param.Name,
 			In:          param.In,
 			Description: param.Description,
@@ -268,7 +338,7 @@ func extractParameters(operation *openapi3.Operation) map[string][]Parameter {
 	if operation.RequestBody != nil && operation.RequestBody.Value != nil {
 		content := operation.RequestBody.Value.Content
 		if appJSON, ok := content["application/json"]; ok && appJSON.Schema != nil {
-			p := Parameter{
+			p := QueryParameter{
 				Name:        "body",
 				In:          "body",
 				Description: "Request body",
@@ -283,7 +353,7 @@ func extractParameters(operation *openapi3.Operation) map[string][]Parameter {
 }
 
 // determineResponseType selects the appropriate response type from the operation's responses
-func determineResponseType(operation *openapi3.Operation, typeSet map[string]struct{}) string {
+func determineResponseType(operation *openapi3.Operation) (string, *openapi3.SchemaRef) {
 	// Prioritize 200, then 201, etc.
 	priority := []int{200, 201, 202, 204}
 
@@ -295,10 +365,10 @@ func determineResponseType(operation *openapi3.Operation, typeSet map[string]str
 					// Resolve schema reference if exists
 					schema := appJSON.Schema
 					if schema.Ref != "" {
-						return toPascalCase(getRefName(schema.Ref))
+						return toPascalCase(getRefName(schema.Ref)), schema
 					} else {
 						// Handle inline schemas or other types
-						return resolveInlineType(schema, typeSet)
+						return resolveInlineType(schema), schema
 					}
 				}
 			}
@@ -306,11 +376,11 @@ func determineResponseType(operation *openapi3.Operation, typeSet map[string]str
 	}
 
 	// Fallback to 'any' if no suitable response found
-	return "any"
+	return "any", nil
 }
 
 // resolveInlineType resolves TypeScript types from inline OpenAPI schemas
-func resolveInlineType(schema *openapi3.SchemaRef, typeSet map[string]struct{}) string {
+func resolveInlineType(schema *openapi3.SchemaRef) string {
 	if schema.Value.Type != nil {
 		if len(*schema.Value.Type) == 1 {
 			openType := strings.ToLower((*schema.Value.Type)[0])
@@ -320,11 +390,8 @@ func resolveInlineType(schema *openapi3.SchemaRef, typeSet map[string]struct{}) 
 					itemType := ""
 					if schema.Value.Items.Ref != "" {
 						itemType = toPascalCase(getRefName(schema.Value.Items.Ref))
-						if !isPrimitiveType(itemType) && itemType != "any" {
-							typeSet[itemType] = struct{}{}
-						}
 					} else {
-						itemType = resolveInlineType(schema.Value.Items, typeSet)
+						itemType = resolveInlineType(schema.Value.Items)
 					}
 					return fmt.Sprintf("%s[]", itemType)
 				}
@@ -361,11 +428,8 @@ func resolveInlineType(schema *openapi3.SchemaRef, typeSet map[string]struct{}) 
 					itemType := ""
 					if schema.Value.Items.Ref != "" {
 						itemType = toPascalCase(getRefName(schema.Value.Items.Ref))
-						if !isPrimitiveType(itemType) && itemType != "any" {
-							typeSet[itemType] = struct{}{}
-						}
 					} else {
-						itemType = resolveInlineType(schema.Value.Items, typeSet)
+						itemType = resolveInlineType(schema.Value.Items)
 					}
 					types = append(types, fmt.Sprintf("%s[]", itemType))
 				} else if tsType, ok := typeMapping[openType]; ok {
@@ -407,28 +471,28 @@ func resolveInlineType(schema *openapi3.SchemaRef, typeSet map[string]struct{}) 
 }
 
 // generateMethod creates a TypeScript method within the GoCartSDK class
-func generateMethod(doc *openapi3.T, methodName, httpMethod, path string, methodParamsList methodParams, responseType string, params map[string][]Parameter) string {
+func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 	var buf bytes.Buffer
 
 	// Generate JSDoc comments
 	buf.WriteString("  /**\n")
-	buf.WriteString(fmt.Sprintf("   * %s\n", methodName))
-	for _, p := range methodParamsList {
-		buf.WriteString(fmt.Sprintf("   * @param %s %s\n", p.Name, p.Type))
+	buf.WriteString(fmt.Sprintf("   * %s\n", methodDefinition.Name))
+	for _, p := range methodDefinition.Arguments {
+		buf.WriteString(fmt.Sprintf("   * @param %s %s\n", p.Name, p.Type.Name))
 	}
-	buf.WriteString(fmt.Sprintf("   * @returns Promise<%s>\n", responseType))
+	buf.WriteString(fmt.Sprintf("   * @returns Promise<%s>\n", methodDefinition.ResponseType))
 	buf.WriteString("   */\n")
 
 	// Generate method signature
 	paramsSignature := []string{}
-	for _, p := range methodParamsList {
-		paramsSignature = append(paramsSignature, fmt.Sprintf("%s: %s", p.Name, p.Type))
+	for _, p := range methodDefinition.Arguments {
+		paramsSignature = append(paramsSignature, fmt.Sprintf("%s: %s", p.Name, p.Type.Name))
 	}
-	buf.WriteString(fmt.Sprintf("  public async %s(%s): Promise<%s> {\n", methodName, strings.Join(paramsSignature, ", "), responseType))
+	buf.WriteString(fmt.Sprintf("  public async %s(%s): Promise<%s> {\n", methodDefinition.Name, strings.Join(paramsSignature, ", "), methodDefinition.ResponseType))
 
 	// Construct URL with path parameters
-	url := path
-	pathParams := extractPathParams(path)
+	url := methodDefinition.Path
+	pathParams := extractPathParams(url)
 	if len(pathParams) > 0 {
 		for _, p := range pathParams {
 			camelParam := toCamelCase(p)
@@ -439,11 +503,13 @@ func generateMethod(doc *openapi3.T, methodName, httpMethod, path string, method
 		buf.WriteString(fmt.Sprintf("    const url = `${this.baseUrl}%s`;\n", url))
 	}
 
-	if httpMethod == "POST" || httpMethod == "PUT" || httpMethod == "PATCH" {
-		// cerate an array with keys of embedded objects in request body type
-		var embeddedObjects []string
-		if param, ok := methodParamsList.GetPayloadParam(); ok {
-			if schemaRef, exists := doc.Components.Schemas[param.Type]; exists && schemaRef.Value != nil {
+	if methodDefinition.HTTPMethod == "POST" || methodDefinition.HTTPMethod == "PUT" || methodDefinition.HTTPMethod == "PATCH" {
+		if methodDefinition.OperationRef.RequestBody != nil && methodDefinition.OperationRef.RequestBody.Value != nil && methodDefinition.OperationRef.RequestBody.Value.Content["application/json"] != nil {
+
+			// cerate an array with keys of embedded objects in request body type
+			var embeddedObjects []string
+			if methodDefinition.ResponseTypeRef != nil && methodDefinition.ResponseTypeRef.Value != nil {
+				schemaRef := methodDefinition.ResponseTypeRef
 				// Look for the `_embedded` property
 				if embeddedSchema, exists := schemaRef.Value.Properties["_embedded"]; exists && embeddedSchema.Value != nil {
 					// Iterate over properties within `_embedded`
@@ -452,50 +518,90 @@ func generateMethod(doc *openapi3.T, methodName, httpMethod, path string, method
 						if propSchema.Value != nil && propSchema.Value.Type.Is("object") && propSchema.Value.Items == nil {
 							embeddedObjects = append(embeddedObjects, toCamelCase(propName))
 						}
+
+						// array of objects
+						if propSchema.Value != nil && propSchema.Value.Type.Is("array") && propSchema.Value.Items != nil {
+							if propSchema.Value.Items.Ref != "" {
+								embeddedObjects = append(embeddedObjects, toCamelCase(propName))
+							}
+						}
 					}
 				}
 			}
-		}
 
-		// write it
-		var bufEmbedded bytes.Buffer
-		bufEmbedded.WriteString("[")
-		for i, eo := range embeddedObjects {
-			bufEmbedded.WriteString(fmt.Sprintf("'%s'", eo))
-			if i < len(embeddedObjects)-1 {
-				bufEmbedded.WriteString(", ")
+			// write it
+			var bufEmbedded bytes.Buffer
+			bufEmbedded.WriteString("[")
+			for i, eo := range embeddedObjects {
+				bufEmbedded.WriteString(fmt.Sprintf("'%s'", eo))
+				if i < len(embeddedObjects)-1 {
+					bufEmbedded.WriteString(", ")
+				}
 			}
-		}
-		bufEmbedded.WriteString("]")
-		buf.WriteString(fmt.Sprintf("		const embeddedObjects: string[] = %v;\n", bufEmbedded.String()))
-		if param, ok := methodParamsList.GetPayloadParam(); ok {
-			buf.WriteString(fmt.Sprintf("		const body = toApiType(%s, embeddedObjects);\n", param.Name))
+			bufEmbedded.WriteString("]")
+			buf.WriteString(fmt.Sprintf("		const embeddedObjects: string[] = %v;\n", bufEmbedded.String()))
+			if param, ok := methodDefinition.Arguments.GetPayloadParam(); ok {
+				buf.WriteString(fmt.Sprintf("		const body = toApiType(%s, embeddedObjects);\n", param.Name))
+			}
+
+			// Initialize options for fetch
+			buf.WriteString("    let options: RequestInit = {\n")
+			buf.WriteString(fmt.Sprintf("      method: '%s',\n", strings.ToUpper(methodDefinition.HTTPMethod)))
+			buf.WriteString("      headers: {\n")
+			buf.WriteString("        'Content-Type': 'application/json',\n")
+			buf.WriteString("        // Add other headers like authentication here\n")
+			buf.WriteString("      },\n")
+
+			if _, ok := methodDefinition.Arguments.GetPayloadParam(); ok {
+				buf.WriteString("      body: JSON.stringify(body),\n")
+			}
+
+			buf.WriteString("    };\n")
 		}
 
-		// Initialize options for fetch
-		buf.WriteString("    let options: RequestInit = {\n")
-		buf.WriteString(fmt.Sprintf("      method: '%s',\n", strings.ToUpper(httpMethod)))
-		buf.WriteString("      headers: {\n")
-		buf.WriteString("        'Content-Type': 'application/json',\n")
-		buf.WriteString("        // Add other headers like authentication here\n")
-		buf.WriteString("      },\n")
+		if methodDefinition.OperationRef.RequestBody != nil && methodDefinition.OperationRef.RequestBody.Value != nil && methodDefinition.OperationRef.RequestBody.Value.Content["multipart/form-data"] != nil {
+			buf.Write([]byte("    // This is a multipart/form-data request\n"))
+			buf.Write([]byte("    // We need to create a FormData object and append fields to it\n"))
+			buf.Write([]byte("    let formData = new FormData();\n"))
+			buf.Write([]byte("    // Add form fields to formData\n"))
+			// iterate over responseTypeRef properties, is it is an object, json.stringify, else append to formData
+			for pName, pSchema := range methodDefinition.OperationRef.RequestBody.Value.Content["multipart/form-data"].Schema.Value.Properties {
+				if pSchema.Value.Type.Is("object") {
+					buf.WriteString(fmt.Sprintf("    if (req.%s) {\n", toCamelCase(pName)))
+					buf.WriteString(fmt.Sprintf("      formData.append('%s', JSON.stringify(req.%s));\n", pName, toCamelCase(pName)))
+					buf.WriteString("    }\n")
+				} else {
+					buf.WriteString(fmt.Sprintf("    if (req.%s !== undefined && req.%s !== null) {\n", toCamelCase(pName), toCamelCase(pName)))
+					buf.WriteString(fmt.Sprintf("      formData.append('%s', req.%s);\n", pName, toCamelCase(pName)))
+					buf.WriteString("    }\n")
+				}
+			}
 
-		if _, ok := methodParamsList.GetPayloadParam(); ok {
-			buf.WriteString("      body: JSON.stringify(body),\n")
+			buf.WriteString("    // Configure the fetch options\n")
+			buf.WriteString("    const options: RequestInit = {\n")
+			buf.WriteString(fmt.Sprintf("      method: '%s',\n", strings.ToUpper(methodDefinition.HTTPMethod)))
+			buf.WriteString("      headers: {\n")
+			buf.WriteString("        // Do not set 'Content-Type' header when sending FormData\n")
+			buf.WriteString("        // The browser will automatically set it, including the boundary\n")
+			buf.WriteString("        'Accept': 'application/json',\n")
+			buf.WriteString("        // Add other headers like authentication here\n")
+			buf.WriteString("      },\n")
+			buf.WriteString("      body: formData,\n")
+			buf.WriteString("    };\n")
+
 		}
 	} else {
 		// Initialize options for fetch
 		buf.WriteString("    let options: RequestInit = {\n")
-		buf.WriteString(fmt.Sprintf("      method: '%s',\n", strings.ToUpper(httpMethod)))
+		buf.WriteString(fmt.Sprintf("      method: '%s',\n", strings.ToUpper(methodDefinition.HTTPMethod)))
 		buf.WriteString("      headers: {\n")
 		buf.WriteString("        'Content-Type': 'application/json',\n")
 		buf.WriteString("        // Add other headers like authentication here\n")
 		buf.WriteString("      },\n")
+		buf.WriteString("    };\n")
 	}
 
-	buf.WriteString("    };\n")
-
-	if strings.HasPrefix(methodName, "list") {
+	if strings.HasPrefix(methodDefinition.Name, "list") {
 		buf.WriteString("    if (params.totalCount) {\n")
 		buf.WriteString("      options.headers = {\n")
 		buf.WriteString("        ...options.headers,\n")
@@ -506,17 +612,17 @@ func generateMethod(doc *openapi3.T, methodName, httpMethod, path string, method
 
 	// Handle query parameters (only for methods that can have query params, typically GET, DELETE)
 	// Assuming that methods with 'params' can have query parameters
-	if methodParamsList.HasParam("params") && params["query"] != nil {
+	if methodDefinition.Arguments.HasParam("params") && methodDefinition.QueryParams["query"] != nil {
 		paramName := "params"
 
 		buf.WriteString("    const queryString = new URLSearchParams();\n")
 
 		// Separate filter, sort, and page parameters
-		var filterParams, sortParams, pageParams, includeParams []Parameter
-		for _, qp := range params["query"] {
+		var filterParams, sortParams, pageParams, includeParams []QueryParameter
+		for _, qp := range methodDefinition.QueryParams["query"] {
 			switch {
 			case strings.HasPrefix(qp.Name, "filter["):
-				filterParams = append(filterParams, Parameter{
+				filterParams = append(filterParams, QueryParameter{
 					Name:        toCamelCase(qp.Name),
 					In:          "query",
 					Description: qp.Description,
@@ -526,7 +632,7 @@ func generateMethod(doc *openapi3.T, methodName, httpMethod, path string, method
 			case qp.Name == "sort":
 				sortParams = append(sortParams, qp)
 			case strings.HasPrefix(qp.Name, "page["):
-				pageParams = append(pageParams, Parameter{
+				pageParams = append(pageParams, QueryParameter{
 					Name:        stripPageParams(qp.Name),
 					In:          "query",
 					Description: qp.Description,
@@ -550,7 +656,7 @@ func generateMethod(doc *openapi3.T, methodName, httpMethod, path string, method
 					// Fallback to regular access
 					camelQP := toCamelCase(fp.Name)
 					buf.WriteString(fmt.Sprintf("      if (%s.%s !== undefined && %s.%s !== null) {\n", paramName, camelQP, paramName, camelQP))
-					buf.WriteString(fmt.Sprintf("        queryString.append('%s', String(%s.%s));\n", fp.Name, paramName, camelQP))
+					buf.WriteString(fmt.Sprintf("        queryString.append('%slesh', String(%s.%s));\n", fp.Name, paramName, camelQP))
 					buf.WriteString("      }\n")
 					continue
 				}
@@ -558,7 +664,7 @@ func generateMethod(doc *openapi3.T, methodName, httpMethod, path string, method
 				camelParent := toCamelCase(parent)
 				// camelKey := toCamelCase(key) // Not used in this context
 				buf.WriteString(fmt.Sprintf("      if (%s.%s[\"%s\"] !== undefined && %s.%s[\"%s\"] !== null) {\n", paramName, camelParent, key, paramName, camelParent, key))
-				buf.WriteString(fmt.Sprintf("        queryString.append('%s', String(%s.%s[\"%s\"]));\n", fp.Name, paramName, camelParent, key))
+				buf.WriteString(fmt.Sprintf("        queryString.append('%s[%s]', String(%s.%s[\"%s\"]));\n", camelParent, toSnakeCase(key), paramName, camelParent, key))
 				buf.WriteString("      }\n")
 			}
 			buf.WriteString("    }\n")
@@ -605,7 +711,7 @@ func generateMethod(doc *openapi3.T, methodName, httpMethod, path string, method
 	buf.WriteString("    }\n")
 
 	// Handle No Content responses (e.g., 204 No Content)
-	if responseType == "any" || responseType == "void" {
+	if methodDefinition.ResponseType == "any" || methodDefinition.ResponseType == "void" {
 		buf.WriteString("    return;\n")
 	} else {
 		buf.WriteString(fmt.Sprintf("    const data = await response.json();\n"))
@@ -687,6 +793,30 @@ func toPascalCase(input string) string {
 	return strings.Join(parts, "")
 }
 
+func toSnakeCase(input string) string {
+	if input == "" {
+		return ""
+	}
+
+	// remove leading _ if exists
+	if input[0] == '_' {
+		input = input[1:]
+	}
+
+	var output []rune
+	for i, r := range input {
+		if unicode.IsUpper(r) {
+			if i > 0 {
+				output = append(output, '_')
+			}
+			output = append(output, unicode.ToLower(r))
+		} else {
+			output = append(output, r)
+		}
+	}
+	return string(output)
+}
+
 // isAllUpper checks if a string is all uppercase
 func isAllUpper(s string) bool {
 	for _, r := range s {
@@ -722,13 +852,4 @@ func sortStrings(s []string) []string {
 // e.g., 'page[number]' -> 'number'
 func stripPageParams(p string) string {
 	return strings.TrimSuffix(strings.TrimPrefix(p, "page["), "]")
-}
-
-// Parameter represents a simplified parameter structure
-type Parameter struct {
-	Name        string
-	In          string
-	Description string
-	Schema      *openapi3.SchemaRef
-	Required    bool
 }

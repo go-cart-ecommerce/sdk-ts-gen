@@ -9,9 +9,14 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 )
 
-func generateTypes(doc *openapi3.T) []byte {
-	typeBuf := bytes.Buffer{}
-	typeBuf.WriteString("// Auto-generated TypeScript types\n\n")
+// TypeDefinition represents a TypeScript type with its name and schema reference.
+type TypeDefinition struct {
+	Name      string
+	SchemaRef *openapi3.SchemaRef
+}
+
+func getTypeDefinitions(doc *openapi3.T) []TypeDefinition {
+	var typeDefs []TypeDefinition
 
 	// Ensure consistent output order
 	var schemaNames []string
@@ -22,11 +27,87 @@ func generateTypes(doc *openapi3.T) []byte {
 
 	for _, schemaName := range schemaNames {
 		schemaRef := doc.Components.Schemas[schemaName]
-		ts, _ := generateTypeScript(schemaName, schemaRef, doc)
+		typeDefs = append(typeDefs, TypeDefinition{Name: toPascalCase(schemaName), SchemaRef: schemaRef})
+	}
+
+	// generate types for request bodies
+	requestBodies := gatherRequestBodies(doc)
+	for operationID, schemaRef := range requestBodies {
+		operationName := fmt.Sprintf("%sRequest", operationID)
+		typeDefs = append(typeDefs, TypeDefinition{Name: toPascalCase(operationName), SchemaRef: schemaRef})
+	}
+
+	return typeDefs
+}
+
+func generateTypes(doc *openapi3.T, typeDefinitions []TypeDefinition) []byte {
+	typeBuf := bytes.Buffer{}
+	typeBuf.WriteString("// Auto-generated TypeScript types\n\n")
+
+	for _, typeDef := range typeDefinitions {
+		ts, _ := generateTypeScript(typeDef.Name, typeDef.SchemaRef, doc)
 		typeBuf.WriteString(ts + "\n\n")
 	}
 
 	return typeBuf.Bytes()
+}
+
+// gatherFormDataRequestBodies scans all paths/operations for requestBody.content["multipart/form-data"] schemas
+// and returns a map of operationId -> SchemaRef
+func gatherRequestBodies(doc *openapi3.T) map[string]*openapi3.SchemaRef {
+	result := make(map[string]*openapi3.SchemaRef)
+
+	for _, path := range doc.Paths.InMatchingOrder() {
+		pathItem := doc.Paths.Find(path)
+		if pathItem == nil {
+			continue
+		}
+
+		operations := map[string]*openapi3.Operation{
+			"post":  pathItem.Post,
+			"patch": pathItem.Patch,
+			"put":   pathItem.Put,
+		}
+
+		for _, op := range operations {
+			if op == nil {
+				continue
+			}
+			if op.RequestBody == nil || op.RequestBody.Value == nil {
+				continue
+			}
+
+			// Look for multipart/form-data or application/json content types
+			if len(op.RequestBody.Value.Content) > 0 && op.RequestBody.Value.Content["multipart/form-data"] != nil {
+				schemaRef := op.RequestBody.Value.Content["multipart/form-data"].Schema
+				if schemaRef == nil {
+					continue
+				}
+				if op.OperationID == "" {
+					continue // No operationId to name the interface
+				}
+				if schemaRef.RefPath() != nil && schemaRef.RefPath().String() != "" {
+					continue
+				}
+				result[op.OperationID] = schemaRef
+			}
+
+			if len(op.RequestBody.Value.Content) > 0 && op.RequestBody.Value.Content["application/json"] != nil {
+				schemaRef := op.RequestBody.Value.Content["application/json"].Schema
+				if schemaRef == nil {
+					continue
+				}
+				if op.OperationID == "" {
+					continue // No operationId to name the interface
+				}
+				if schemaRef.RefPath() != nil && schemaRef.RefPath().String() != "" {
+					continue
+				}
+				result[op.OperationID] = schemaRef
+			}
+		}
+	}
+	return result
 }
 
 // generateTypeScript generates TypeScript interfaces/types from OpenAPI schemas
@@ -174,17 +255,4 @@ func contains(slice []string, str string) bool {
 		}
 	}
 	return false
-}
-
-// removeDuplicates removes duplicate strings from a slice
-func removeDuplicates(elements []string) []string {
-	encountered := map[string]bool{}
-	result := []string{}
-	for _, v := range elements {
-		if !encountered[v] {
-			encountered[v] = true
-			result = append(result, v)
-		}
-	}
-	return result
 }

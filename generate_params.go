@@ -10,12 +10,14 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 )
 
-func generateParams(doc *openapi3.T) []byte {
-	// Prepare to collect all TypeScript types
-	var tsBuffer bytes.Buffer
-	tsBuffer.WriteString("// Auto-generated TypeScript types\n\n")
+type ParamDefinition struct {
+	Name      string
+	Params    []QueryParameter
+	Operation *openapi3.Operation
+}
 
-	var allAdditionalTypes []string
+func getParamDefinitions(doc *openapi3.T) []ParamDefinition {
+	var paramDefs []ParamDefinition
 
 	// Iterate over all paths in matching order
 	for _, path := range doc.Paths.InMatchingOrder() {
@@ -37,16 +39,35 @@ func generateParams(doc *openapi3.T) []byte {
 			// Extract query parameters
 			queryParams := extractQueryParameters(operation)
 
-			// Process parameters into TypeScript interface
-			tsInterface, additionalTypes := generateTypeScriptInterface(interfaceName, queryParams, operation, doc)
-
-			// Collect all additional TypeScript types (e.g., enums)
-			allAdditionalTypes = append(allAdditionalTypes, additionalTypes...)
-
-			// Append the generated interface to the buffer
-			tsBuffer.WriteString(tsInterface)
-			tsBuffer.WriteString("\n")
+			paramDefs = append(paramDefs, ParamDefinition{
+				Name:      interfaceName,
+				Params:    queryParams,
+				Operation: operation,
+			})
 		}
+	}
+
+	return paramDefs
+}
+
+func generateParams(doc *openapi3.T, paramDefs []ParamDefinition) []byte {
+	// Prepare to collect all TypeScript types
+	var tsBuffer bytes.Buffer
+	tsBuffer.WriteString("// Auto-generated TypeScript types\n\n")
+
+	var allAdditionalTypes []string
+
+	// Iterate over all paths in matching order
+	for _, paramDef := range paramDefs {
+		// Process parameters into TypeScript interface
+		tsInterface, additionalTypes := generateTypeScriptInterface(paramDef.Name, paramDef.Params, paramDef.Operation, doc)
+
+		// Collect all additional TypeScript types (e.g., enums)
+		allAdditionalTypes = append(allAdditionalTypes, additionalTypes...)
+
+		// Append the generated interface to the buffer
+		tsBuffer.WriteString(tsInterface)
+		tsBuffer.WriteString("\n")
 	}
 
 	// Sort additional types to ensure consistent output
@@ -58,6 +79,55 @@ func generateParams(doc *openapi3.T) []byte {
 	// Output the TypeScript code
 	return tsBuffer.Bytes()
 }
+
+// func generateParams(doc *openapi3.T) []byte {
+// 	// Prepare to collect all TypeScript types
+// 	var tsBuffer bytes.Buffer
+// 	tsBuffer.WriteString("// Auto-generated TypeScript types\n\n")
+
+// 	var allAdditionalTypes []string
+
+// 	// Iterate over all paths in matching order
+// 	for _, path := range doc.Paths.InMatchingOrder() {
+// 		pathItem := doc.Paths.Find(path)
+
+// 		// Iterate over all operations in the path
+// 		operations := map[string]*openapi3.Operation{
+// 			"GET": pathItem.Get,
+// 		}
+
+// 		for method, operation := range operations {
+// 			if operation == nil {
+// 				continue
+// 			}
+
+// 			// Determine a unique interface name
+// 			interfaceName := generateInterfaceName(method, path, operation.OperationID)
+
+// 			// Extract query parameters
+// 			queryParams := extractQueryParameters(operation)
+
+// 			// Process parameters into TypeScript interface
+// 			tsInterface, additionalTypes := generateTypeScriptInterface(interfaceName, queryParams, operation, doc)
+
+// 			// Collect all additional TypeScript types (e.g., enums)
+// 			allAdditionalTypes = append(allAdditionalTypes, additionalTypes...)
+
+// 			// Append the generated interface to the buffer
+// 			tsBuffer.WriteString(tsInterface)
+// 			tsBuffer.WriteString("\n")
+// 		}
+// 	}
+
+// 	// Sort additional types to ensure consistent output
+// 	sort.Strings(allAdditionalTypes)
+// 	for _, tsType := range allAdditionalTypes {
+// 		tsBuffer.WriteString(tsType + "\n\n")
+// 	}
+
+// 	// Output the TypeScript code
+// 	return tsBuffer.Bytes()
+// }
 
 // generateInterfaceName creates a unique and descriptive TypeScript interface name
 func generateInterfaceName(method, path, operationID string) string {
@@ -77,12 +147,12 @@ func generateInterfaceName(method, path, operationID string) string {
 }
 
 // extractQueryParameters extracts query parameters from an operation
-func extractQueryParameters(operation *openapi3.Operation) []Parameter {
-	var params []Parameter
+func extractQueryParameters(operation *openapi3.Operation) []QueryParameter {
+	var params []QueryParameter
 	for _, paramRef := range operation.Parameters {
 		param := paramRef.Value
 		if param.In == "query" {
-			params = append(params, Parameter{
+			params = append(params, QueryParameter{
 				Name:        param.Name,
 				In:          param.In,
 				Description: param.Description,
@@ -95,7 +165,7 @@ func extractQueryParameters(operation *openapi3.Operation) []Parameter {
 }
 
 // generateTypeScriptInterface generates the TypeScript interface for parameters
-func generateTypeScriptInterface(interfaceName string, params []Parameter, operation *openapi3.Operation, doc *openapi3.T) (string, []string) {
+func generateTypeScriptInterface(interfaceName string, params []QueryParameter, operation *openapi3.Operation, doc *openapi3.T) (string, []string) {
 	var buf bytes.Buffer
 	var additionalTypes []string
 
@@ -164,15 +234,15 @@ func generateTypeScriptInterface(interfaceName string, params []Parameter, opera
 }
 
 // groupParameters groups parameters by their base (e.g., filter, page)
-func groupParameters(params []Parameter) map[string][]Parameter {
-	grouped := make(map[string][]Parameter)
+func groupParameters(params []QueryParameter) map[string][]QueryParameter {
+	grouped := make(map[string][]QueryParameter)
 	for _, param := range params {
 		// Check if parameter name has a nested structure like filter[id]
 		if strings.Contains(param.Name, "[") && strings.HasSuffix(param.Name, "]") {
 			base := param.Name[:strings.Index(param.Name, "[")]
 			nested := param.Name[strings.Index(param.Name, "[")+1 : len(param.Name)-1]
 			// Create a new parameter with base as group and nested name
-			grouped[base] = append(grouped[base], Parameter{
+			grouped[base] = append(grouped[base], QueryParameter{
 				Name:        nested,
 				In:          param.In,
 				Description: param.Description,
@@ -188,7 +258,7 @@ func groupParameters(params []Parameter) map[string][]Parameter {
 }
 
 // extractEnumValues extracts enum values for specific groups
-func extractEnumValues(groupName string, params []Parameter) []string {
+func extractEnumValues(groupName string, params []QueryParameter) []string {
 	var enumValues []string
 	for _, param := range params {
 		if param.Schema != nil && len(param.Schema.Value.Enum) > 0 {
@@ -211,7 +281,7 @@ func extractEnumValues(groupName string, params []Parameter) []string {
 }
 
 // generateNestedInterface generates a TypeScript nested interface or type
-func generateNestedInterface(name string, params []Parameter, doc *openapi3.T) (string, []string) {
+func generateNestedInterface(name string, params []QueryParameter, doc *openapi3.T) (string, []string) {
 	var buf bytes.Buffer
 	var additionalTypes []string
 
@@ -284,12 +354,28 @@ func resolveType(schemaRef *openapi3.SchemaRef, doc *openapi3.T) (string, []stri
 						// Recursively resolve the type of array items
 						itemType, additional := resolveType(schema.Items, doc)
 						additionalTypes = append(additionalTypes, additional...)
-						tsTypes = append(tsTypes, fmt.Sprintf("%s[]", itemType))
-					} else {
-						tsTypes = append(tsTypes, mappedType)
+						return fmt.Sprintf("%s[]", itemType), additionalTypes
 					}
-				} else {
-					tsTypes = append(tsTypes, "any")
+
+					// Handle special formats
+					if strings.ToLower(t) == "string" {
+						// Handle special formats
+						if t == "string" {
+							// Map specific string formats to string or more specific types if desired
+							switch schema.Format {
+							case "binary":
+								return "Blob", additionalTypes
+							case "date":
+							case "date-time":
+							case "uuid":
+								return "string", additionalTypes
+							default:
+								return "string", additionalTypes
+							}
+						}
+					}
+
+					return mappedType, additionalTypes
 				}
 			default:
 				tsTypes = append(tsTypes, "any")
@@ -302,37 +388,58 @@ func resolveType(schemaRef *openapi3.SchemaRef, doc *openapi3.T) (string, []stri
 	}
 
 	// Handle single type
-	if schema.Type != nil && len(*schema.Type) == 1 {
-		t := (*schema.Type)[0]
-		switch strings.ToLower(t) {
-		case "integer", "number", "string", "boolean", "object", "array", "null":
-			if mappedType, ok := typeMapping[strings.ToLower(t)]; ok {
-				if strings.ToLower(t) == "array" && schema.Items != nil {
-					// Recursively resolve the type of array items
-					itemType, additional := resolveType(schema.Items, doc)
-					additionalTypes = append(additionalTypes, additional...)
-					return fmt.Sprintf("%s[]", itemType), additionalTypes
-				}
+	// if schema.Type != nil && len(*schema.Type) == 1 {
+	// 	t := (*schema.Type)[0]
+	// 	switch strings.ToLower(t) {
+	// 	case "integer", "number", "string", "boolean", "object", "array", "null":
+	// 		if mappedType, ok := typeMapping[strings.ToLower(t)]; ok {
+	// 			if strings.ToLower(t) == "array" && schema.Items != nil {
+	// 				// Recursively resolve the type of array items
+	// 				itemType, additional := resolveType(schema.Items, doc)
+	// 				additionalTypes = append(additionalTypes, additional...)
+	// 				return fmt.Sprintf("%s[]", itemType), additionalTypes
+	// 			}
 
-				// Handle special formats
-				if strings.ToLower(t) == "string" {
-					// Handle special formats
-					if t == "string" {
-						// Map specific string formats to string or more specific types if desired
-						if schema.Format == "date-time" || schema.Format == "uuid" {
-							return "string", additionalTypes
-						}
-					}
-				}
+	// 			// Handle special formats
+	// 			if strings.ToLower(t) == "string" {
+	// 				// Handle special formats
+	// 				if t == "string" {
+	// 					// Map specific string formats to string or more specific types if desired
+	// 					fmt.Println("schema.Format", schema.Format)
+	// 					switch schema.Format {
+	// 					case "binary":
+	// 						return "Blob", additionalTypes
+	// 					case "date":
+	// 					case "date-time":
+	// 					case "uuid":
+	// 						return "string", additionalTypes
+	// 					default:
+	// 						return "string", additionalTypes
+	// 					}
+	// 				}
+	// 			}
 
-				return mappedType, additionalTypes
-			}
-			return "any", additionalTypes
-		default:
-			return "any", additionalTypes
-		}
-	}
+	// 			return mappedType, additionalTypes
+	// 		}
+	// 		return "any", additionalTypes
+	// 	default:
+	// 		return "any", additionalTypes
+	// 	}
+	// }
 
 	// Default fallback
 	return "any", additionalTypes
+}
+
+// removeDuplicates removes duplicate strings from a slice
+func removeDuplicates(elements []string) []string {
+	encountered := map[string]bool{}
+	result := []string{}
+	for _, v := range elements {
+		if !encountered[v] {
+			encountered[v] = true
+			result = append(result, v)
+		}
+	}
+	return result
 }
