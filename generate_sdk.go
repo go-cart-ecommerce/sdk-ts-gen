@@ -470,6 +470,29 @@ func resolveInlineType(schema *openapi3.SchemaRef) string {
 	return "any"
 }
 
+func getEmbeddedKeysFromSchema(schema *openapi3.SchemaRef) []string {
+	var embeddedObjects []string
+
+	if embeddedSchema, exists := schema.Value.Properties["_embedded"]; exists && embeddedSchema.Value != nil {
+		// Iterate over properties within `_embedded`
+		for propName, propSchema := range embeddedSchema.Value.Properties {
+			// Check if the property is an object (excluding arrays and primitives)
+			if propSchema.Value != nil && propSchema.Value.Type.Is("object") && propSchema.Value.Items == nil {
+				embeddedObjects = append(embeddedObjects, toCamelCase(propName))
+			}
+
+			// array of objects
+			if propSchema.Value != nil && propSchema.Value.Type.Is("array") && propSchema.Value.Items != nil {
+				if propSchema.Value.Items.Ref != "" {
+					embeddedObjects = append(embeddedObjects, toCamelCase(propName))
+				}
+			}
+		}
+	}
+
+	return embeddedObjects
+}
+
 // generateMethod creates a TypeScript method within the GoCartSDK class
 func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 	var buf bytes.Buffer
@@ -506,25 +529,23 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 	if methodDefinition.HTTPMethod == "POST" || methodDefinition.HTTPMethod == "PUT" || methodDefinition.HTTPMethod == "PATCH" {
 		if methodDefinition.OperationRef.RequestBody != nil && methodDefinition.OperationRef.RequestBody.Value != nil && methodDefinition.OperationRef.RequestBody.Value.Content["application/json"] != nil {
 
-			// cerate an array with keys of embedded objects in request body type
+			// create an array with keys of embedded objects in the response schema
 			var embeddedObjects []string
-			if methodDefinition.ResponseTypeRef != nil && methodDefinition.ResponseTypeRef.Value != nil {
-				schemaRef := methodDefinition.ResponseTypeRef
-				// Look for the `_embedded` property
-				if embeddedSchema, exists := schemaRef.Value.Properties["_embedded"]; exists && embeddedSchema.Value != nil {
-					// Iterate over properties within `_embedded`
-					for propName, propSchema := range embeddedSchema.Value.Properties {
-						// Check if the property is an object (excluding arrays and primitives)
-						if propSchema.Value != nil && propSchema.Value.Type.Is("object") && propSchema.Value.Items == nil {
-							embeddedObjects = append(embeddedObjects, toCamelCase(propName))
-						}
+			requestSchema := methodDefinition.OperationRef.RequestBody.Value.Content["application/json"].Schema
 
-						// array of objects
-						if propSchema.Value != nil && propSchema.Value.Type.Is("array") && propSchema.Value.Items != nil {
-							if propSchema.Value.Items.Ref != "" {
-								embeddedObjects = append(embeddedObjects, toCamelCase(propName))
-							}
-						}
+			if requestSchema.Value.Type.Is("object") {
+				if methodDefinition.ResponseTypeRef != nil && methodDefinition.ResponseTypeRef.Value != nil {
+					schemaRef := methodDefinition.ResponseTypeRef
+					// Look for the `_embedded` property
+					embeddedObjects = getEmbeddedKeysFromSchema(schemaRef)
+				}
+			} else if requestSchema.Value.Type.Is("array") {
+				// Handle array of objects
+				if requestSchema.Value.Items != nil && requestSchema.Value.Items.Ref != "" {
+					// resolve the ref
+					itemSchema, _ := resolveSchemaRef(requestSchema.Value.Items, doc)
+					if itemSchema.Value.Type.Is("object") {
+						embeddedObjects = getEmbeddedKeysFromSchema(requestSchema.Value.Items)
 					}
 				}
 			}
