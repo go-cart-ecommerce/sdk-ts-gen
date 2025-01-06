@@ -715,7 +715,7 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 
 		if len(includeParams) > 0 {
 			buf.WriteString(fmt.Sprintf("    if (%s.include) {\n", paramName))
-			buf.WriteString(fmt.Sprintf("      queryString.append('include', %s.include.join(','));\n", paramName))
+			buf.WriteString(fmt.Sprintf("      queryString.append('include', %s.include.map((v)=> v.replace(/([A-Z])/g, '_$1').toLowerCase()).join(','));\n", paramName))
 			buf.WriteString("    }\n")
 		}
 
