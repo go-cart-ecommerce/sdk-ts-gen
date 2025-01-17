@@ -285,13 +285,17 @@ func generateSDK(doc *openapi3.T, typeDefinitions []TypeDefinition, paramDefinit
 		tsBuffer.WriteString("} from './params';\n\n")
 	}
 
+	tsBuffer.WriteString("import { InMemoryContext } from './context';\n")
 	tsBuffer.WriteString("import { toApiType, toClientType } from './utils';\n\n")
 
 	// Start GoCartSDK class
 	tsBuffer.WriteString("export class GoCartSDK {\n")
 	tsBuffer.WriteString("  private baseUrl: string;\n\n")
+	tsBuffer.WriteString("  public context: InMemoryContext;\n\n")
+
 	tsBuffer.WriteString("  constructor(baseUrl: string = 'https://api.orbita.al') {\n")
 	tsBuffer.WriteString("    this.baseUrl = baseUrl;\n")
+	tsBuffer.WriteString("    this.context = new InMemoryContext();\n")
 	tsBuffer.WriteString("  }\n\n")
 
 	for _, m := range methodDefinitions {
@@ -599,7 +603,7 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 			}
 
 			buf.WriteString("    // Configure the fetch options\n")
-			buf.WriteString("    const options: RequestInit = {\n")
+			buf.WriteString("    let options: RequestInit = {\n")
 			buf.WriteString(fmt.Sprintf("      method: '%s',\n", strings.ToUpper(methodDefinition.HTTPMethod)))
 			buf.WriteString("      headers: {\n")
 			buf.WriteString("        // Do not set 'Content-Type' header when sending FormData\n")
@@ -725,6 +729,7 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 	}
 
 	// Make the HTTP request
+	buf.WriteString("    options = this.context.setHttpRequestHeaders(options);\n")
 	buf.WriteString("    const response = await fetch(finalUrl, options);\n")
 	buf.WriteString("    if (!response.ok) {\n")
 	buf.WriteString("      // Handle errors appropriately\n")
