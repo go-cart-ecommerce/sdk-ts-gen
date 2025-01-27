@@ -13,6 +13,7 @@ import (
 type TypeDefinition struct {
 	Name      string
 	SchemaRef *openapi3.SchemaRef
+	Optional  bool
 }
 
 func getTypeDefinitions(doc *openapi3.T) []TypeDefinition {

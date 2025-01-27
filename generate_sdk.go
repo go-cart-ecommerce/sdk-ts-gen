@@ -211,7 +211,8 @@ func getMethodDefinitions(doc *openapi3.T) MethodDefinitions {
 				methodArgumentList = append(methodArgumentList, MethodArgumentDefinition{
 					Name: "params",
 					Type: TypeDefinition{
-						Name: paramTypeName,
+						Name:     paramTypeName,
+						Optional: true,
 					},
 				})
 			default:
@@ -270,6 +271,7 @@ func generateSDK(doc *openapi3.T, typeDefinitions []TypeDefinition, paramDefinit
 		for _, tsType := range importTypes {
 			tsBuffer.WriteString(fmt.Sprintf("  %s,\n", tsType))
 		}
+		tsBuffer.WriteString("  APIError,\n")
 		tsBuffer.WriteString("} from './types';\n")
 	}
 
@@ -513,7 +515,11 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 	// Generate method signature
 	paramsSignature := []string{}
 	for _, p := range methodDefinition.Arguments {
-		paramsSignature = append(paramsSignature, fmt.Sprintf("%s: %s", p.Name, p.Type.Name))
+		if p.Type.Optional {
+			paramsSignature = append(paramsSignature, fmt.Sprintf("%s: %s = {}", p.Name, p.Type.Name))
+		} else {
+			paramsSignature = append(paramsSignature, fmt.Sprintf("%s: %s", p.Name, p.Type.Name))
+		}
 	}
 	buf.WriteString(fmt.Sprintf("  public async %s(%s): Promise<%s> {\n", methodDefinition.Name, strings.Join(paramsSignature, ", "), methodDefinition.ResponseType))
 
@@ -700,7 +706,8 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 			for _, sp := range sortParams {
 				camelSP := toCamelCase(sp.Name)
 				buf.WriteString(fmt.Sprintf("    if (%s.%s !== undefined && %s.%s !== null) {\n", paramName, camelSP, paramName, camelSP))
-				buf.WriteString(fmt.Sprintf("      queryString.append('%s', String(%s.%s));\n", sp.Name, paramName, camelSP))
+				// join array and replace camelCase with snake_case
+				buf.WriteString(fmt.Sprintf("      queryString.append('%s', %s.%s.map((v)=> v.replace(/([A-Z])/g, '_$1').toLowerCase()).join(','));\n", sp.Name, paramName, camelSP))
 				buf.WriteString("    }\n")
 			}
 		}
@@ -732,8 +739,8 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 	buf.WriteString("    options = this.context.setHttpRequestHeaders(options);\n")
 	buf.WriteString("    const response = await fetch(finalUrl, options);\n")
 	buf.WriteString("    if (!response.ok) {\n")
-	buf.WriteString("      // Handle errors appropriately\n")
-	buf.WriteString("      throw new Error(`Request failed with status ${response.status}`);\n")
+	buf.WriteString("      const errMessage: APIError = await response.json();\n")
+	buf.WriteString("      throw new Error(`Request failed with status ${response.status}. Code: ${errMessage.code}, Message: ${errMessage.message}`);\n")
 	buf.WriteString("    }\n")
 
 	// Handle No Content responses (e.g., 204 No Content)
