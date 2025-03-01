@@ -162,13 +162,21 @@ func generateTypeScript(name string, schemaRef *openapi3.SchemaRef, doc *openapi
 			if contains(schema.Required, propName) {
 				optional = false
 			}
+			nullable := false
+			if schema.Nullable {
+				nullable = true
+			}
 
 			propType, _ := resolveType(prop, doc)
 
 			camelPropName := toCamelCase(propName)
 
 			if optional {
-				buf.WriteString(fmt.Sprintf("  %s?: %s;\n", camelPropName, propType))
+				if nullable {
+					buf.WriteString(fmt.Sprintf("  %s?: %s | null;\n", camelPropName, propType))
+				} else {
+					buf.WriteString(fmt.Sprintf("  %s?: %s;\n", camelPropName, propType))
+				}
 			} else {
 				buf.WriteString(fmt.Sprintf("  %s: %s;\n", camelPropName, propType))
 			}
@@ -192,8 +200,17 @@ func generateTypeScript(name string, schemaRef *openapi3.SchemaRef, doc *openapi
 				if contains(embeddedSchema.Required, embeddedPropName) {
 					optional = false
 				}
+
+				nullable := false
+				if embeddedProp.Value != nil && embeddedProp.Value.Nullable {
+					nullable = true
+				}
 				if optional {
-					buf.WriteString(fmt.Sprintf("  %s?: %s;\n", camelEmbeddedPropName, embeddedPropType))
+					if nullable {
+						buf.WriteString(fmt.Sprintf("  %s?: %s | null;\n", camelEmbeddedPropName, embeddedPropType))
+					} else {
+						buf.WriteString(fmt.Sprintf("  %s?: %s;\n", camelEmbeddedPropName, embeddedPropType))
+					}
 				} else {
 					buf.WriteString(fmt.Sprintf("  %s: %s;\n", camelEmbeddedPropName, embeddedPropType))
 				}

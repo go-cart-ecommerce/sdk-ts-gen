@@ -288,6 +288,7 @@ func generateSDK(doc *openapi3.T, typeDefinitions []TypeDefinition, paramDefinit
 	}
 
 	tsBuffer.WriteString("import { InMemoryContext } from './context';\n")
+	tsBuffer.WriteString("import { ApiError } from './error';\n")
 	tsBuffer.WriteString("import { toApiType, toClientType } from './utils';\n\n")
 
 	// Start GoCartSDK class
@@ -740,7 +741,7 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 	buf.WriteString("    const response = await fetch(finalUrl, options);\n")
 	buf.WriteString("    if (!response.ok) {\n")
 	buf.WriteString("      const errMessage: APIError = await response.json();\n")
-	buf.WriteString("      throw new Error(`Request failed with status ${response.status}. Code: ${errMessage.code}, Message: ${errMessage.message}`);\n")
+	buf.WriteString("      throw new ApiError(errMessage.code, errMessage.message, errMessage.fieldErrors);\n")
 	buf.WriteString("    }\n")
 
 	// Handle No Content responses (e.g., 204 No Content)
@@ -787,7 +788,6 @@ func getRefName(ref string) string {
 }
 
 // toCamelCase converts snake_case or any_case to camelCase
-// toCamelCase converts a string to camelCase
 func toCamelCase(input string) string {
 	if input == "" {
 		return ""
@@ -808,7 +808,6 @@ func toCamelCase(input string) string {
 			parts[i] = strings.Title(part)
 		}
 	}
-
 	return strings.Join(parts, "")
 }
 
