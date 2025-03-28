@@ -289,16 +289,26 @@ func generateSDK(doc *openapi3.T, typeDefinitions []TypeDefinition, paramDefinit
 
 	tsBuffer.WriteString("import { InMemoryContext } from './context';\n")
 	tsBuffer.WriteString("import { ApiError } from './error';\n")
-	tsBuffer.WriteString("import { toApiType, toClientType } from './utils';\n\n")
+	tsBuffer.WriteString("import { toApiType, toClientType } from './utils';\n")
+	tsBuffer.WriteString("import { RequestInterceptor, ResponseInterceptor, InterceptorManager } from './interceptors';\n\n")
+	tsBuffer.WriteString("const SDK_VERSION = 'unset';\n\n")
 
 	// Start GoCartSDK class
 	tsBuffer.WriteString("export class GoCartSDK {\n")
 	tsBuffer.WriteString("  private baseUrl: string;\n\n")
-	tsBuffer.WriteString("  public context: InMemoryContext;\n\n")
+	tsBuffer.WriteString("  public context: InMemoryContext;\n")
+	tsBuffer.WriteString("  public interceptors: {\n")
+	tsBuffer.WriteString("    request: InterceptorManager<RequestInterceptor>;\n")
+	tsBuffer.WriteString("    response: InterceptorManager<ResponseInterceptor>;\n")
+	tsBuffer.WriteString("  };\n\n")
 
 	tsBuffer.WriteString("  constructor(baseUrl: string = 'https://api.orbita.al') {\n")
 	tsBuffer.WriteString("    this.baseUrl = baseUrl;\n")
 	tsBuffer.WriteString("    this.context = new InMemoryContext();\n")
+	tsBuffer.WriteString("    this.interceptors = {\n")
+	tsBuffer.WriteString("      request: new InterceptorManager<RequestInterceptor>(),\n")
+	tsBuffer.WriteString("      response: new InterceptorManager<ResponseInterceptor>()\n")
+	tsBuffer.WriteString("    };\n")
 	tsBuffer.WriteString("  }\n\n")
 
 	for _, m := range methodDefinitions {
@@ -581,6 +591,7 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 			buf.WriteString(fmt.Sprintf("      method: '%s',\n", strings.ToUpper(methodDefinition.HTTPMethod)))
 			buf.WriteString("      headers: {\n")
 			buf.WriteString("        'Content-Type': 'application/json',\n")
+			buf.WriteString("        'x-gocart-sdk-version': SDK_VERSION,\n")
 			buf.WriteString("        // Add other headers like authentication here\n")
 			buf.WriteString("      },\n")
 
@@ -616,6 +627,7 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 			buf.WriteString("        // Do not set 'Content-Type' header when sending FormData\n")
 			buf.WriteString("        // The browser will automatically set it, including the boundary\n")
 			buf.WriteString("        'Accept': 'application/json',\n")
+			buf.WriteString("        'x-gocart-sdk-version': SDK_VERSION,\n")
 			buf.WriteString("        // Add other headers like authentication here\n")
 			buf.WriteString("      },\n")
 			buf.WriteString("      body: formData,\n")
@@ -628,6 +640,7 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 		buf.WriteString(fmt.Sprintf("      method: '%s',\n", strings.ToUpper(methodDefinition.HTTPMethod)))
 		buf.WriteString("      headers: {\n")
 		buf.WriteString("        'Content-Type': 'application/json',\n")
+		buf.WriteString("        'x-gocart-sdk-version': SDK_VERSION,\n")
 		buf.WriteString("        // Add other headers like authentication here\n")
 		buf.WriteString("      },\n")
 		buf.WriteString("    };\n")
@@ -727,18 +740,39 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 
 		if len(includeParams) > 0 {
 			buf.WriteString(fmt.Sprintf("    if (%s.include) {\n", paramName))
-			buf.WriteString(fmt.Sprintf("      queryString.append('include', %s.include.map((v)=> v.replace(/([A-Z])/g, '_$1').toLowerCase()).join(','));\n", paramName))
+			buf.WriteString("      queryString.append('include', params.include.map((v) => {\n")
+			buf.WriteString("        // First handle path segments with dots\n")
+			buf.WriteString("        return v.split('.').map(segment => {\n")
+			buf.WriteString("          // Convert camelCase or PascalCase to snake_case\n")
+			buf.WriteString("          return segment.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();\n")
+			buf.WriteString("        }).join('.');\n")
+			buf.WriteString("      }).join(','));\n")
 			buf.WriteString("    }\n")
 		}
 
-		buf.WriteString("    const finalUrl = queryString.toString() ? `${url}?${queryString.toString()}` : url;\n")
+		buf.WriteString("    let finalUrl = queryString.toString() ? `${url}?${queryString.toString()}` : url;\n")
 	} else {
-		buf.WriteString("    const finalUrl = url;\n")
+		buf.WriteString("    let finalUrl = url;\n")
 	}
 
 	// Make the HTTP request
 	buf.WriteString("    options = this.context.setHttpRequestHeaders(options);\n")
-	buf.WriteString("    const response = await fetch(finalUrl, options);\n")
+	buf.WriteString("    // Apply request interceptors\n")
+	buf.WriteString("    for (const interceptor of this.interceptors.request.interceptors) {\n")
+	buf.WriteString("      const result = await interceptor(options, finalUrl);\n")
+	buf.WriteString("      if (result) {\n")
+	buf.WriteString("        if (result.options) options = result.options;\n")
+	buf.WriteString("        if (result.url) finalUrl = result.url;\n")
+	buf.WriteString("      }\n")
+	buf.WriteString("    }\n\n")
+	buf.WriteString("    let response = await fetch(finalUrl, options);\n")
+	buf.WriteString("    // Apply response interceptors\n")
+	buf.WriteString("    for (const interceptor of this.interceptors.response.interceptors) {\n")
+	buf.WriteString("      const result = await interceptor(response, options, finalUrl);\n")
+	buf.WriteString("      if (result) {\n")
+	buf.WriteString("        response = result;\n")
+	buf.WriteString("      }\n")
+	buf.WriteString("    }\n\n")
 	buf.WriteString("    if (!response.ok) {\n")
 	buf.WriteString("      const errMessage: APIError = await response.json();\n")
 	buf.WriteString("      throw new ApiError(errMessage.code, errMessage.message, errMessage.fieldErrors);\n")
@@ -748,7 +782,7 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 	if methodDefinition.ResponseType == "any" || methodDefinition.ResponseType == "void" {
 		buf.WriteString("    return;\n")
 	} else {
-		buf.WriteString(fmt.Sprintf("    const data = await response.json();\n"))
+		buf.WriteString("    const data = await response.json();\n")
 		buf.WriteString("    // Transform keys to camelCase and recursively convert nested objects\n")
 		buf.WriteString("    return toClientType(data);\n")
 	}
@@ -872,12 +906,6 @@ func isPrimitiveType(tsType string) bool {
 	}
 	_, exists := primitiveTypes[tsType]
 	return exists
-}
-
-// sortStrings sorts a slice of strings alphabetically
-func sortStrings(s []string) []string {
-	sort.Strings(s)
-	return s
 }
 
 // stripPageParams removes 'page[' and ']' from a parameter name
