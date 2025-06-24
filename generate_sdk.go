@@ -378,6 +378,14 @@ func determineResponseType(operation *openapi3.Operation) (string, *openapi3.Sch
 		respRef := operation.Responses.Status(code)
 		if respRef != nil && respRef.Value != nil {
 			if respRef.Value.Content != nil {
+				// Check for binary content types first
+				for contentType := range respRef.Value.Content {
+					if isBinaryContentType(contentType) {
+						return "Blob", nil
+					}
+				}
+
+				// Check for JSON content
 				if appJSON, ok := respRef.Value.Content["application/json"]; ok && appJSON.Schema != nil {
 					// Resolve schema reference if exists
 					schema := appJSON.Schema
@@ -394,6 +402,30 @@ func determineResponseType(operation *openapi3.Operation) (string, *openapi3.Sch
 
 	// Fallback to 'any' if no suitable response found
 	return "any", nil
+}
+
+// isBinaryContentType checks if the content type represents binary data
+func isBinaryContentType(contentType string) bool {
+	binaryTypes := []string{
+		"application/octet-stream",
+		"application/pdf",
+		"image/",
+		"video/",
+		"audio/",
+		"text/csv",
+		"application/vnd.openxmlformats-officedocument",
+		"application/vnd.ms-excel",
+		"application/msword",
+		"application/zip",
+		"application/x-zip-compressed",
+	}
+
+	for _, binaryType := range binaryTypes {
+		if strings.HasPrefix(contentType, binaryType) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveInlineType resolves TypeScript types from inline OpenAPI schemas
@@ -781,6 +813,10 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 	// Handle No Content responses (e.g., 204 No Content)
 	if methodDefinition.ResponseType == "any" || methodDefinition.ResponseType == "void" {
 		buf.WriteString("    return;\n")
+	} else if methodDefinition.ResponseType == "Blob" {
+		buf.WriteString("    // Handle binary response\n")
+		buf.WriteString("    const blob = await response.blob();\n")
+		buf.WriteString("    return blob;\n")
 	} else {
 		buf.WriteString("    const data = await response.json();\n")
 		buf.WriteString("    // Transform keys to camelCase and recursively convert nested objects\n")
@@ -903,6 +939,7 @@ func isPrimitiveType(tsType string) bool {
 		"any":     {},
 		"any[]":   {},
 		"void":    {},
+		"Blob":    {},
 	}
 	_, exists := primitiveTypes[tsType]
 	return exists
