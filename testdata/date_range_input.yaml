@@ -1,0 +1,38 @@
+openapi: 3.0.0
+info:
+  title: Test API
+  version: 1.0.0
+paths:
+  /items:
+    get:
+      operationId: listItems
+      parameters:
+        - in: query
+          name: filter[created_at]
+          schema:
+            type: string
+          description: Filter by creation date
+          x-gocart-sdk-type: DateRange
+        - in: query
+          name: filter[updated_at]
+          schema:
+            type: string
+          description: Filter by update date
+          x-gocart-sdk-type: DateRange
+        - in: query
+          name: filter[name]
+          schema:
+            type: string
+          description: Filter by name
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object 

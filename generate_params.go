@@ -55,6 +55,56 @@ func generateParams(doc *openapi3.T, paramDefs []ParamDefinition) []byte {
 	var tsBuffer bytes.Buffer
 	tsBuffer.WriteString("// Auto-generated TypeScript types\n\n")
 
+	// Add DateRange type definition
+	tsBuffer.WriteString("/**\n")
+	tsBuffer.WriteString(" * DateRange type for filtering by date ranges\n")
+	tsBuffer.WriteString(" */\n")
+	tsBuffer.WriteString("export interface DateRange {\n")
+	tsBuffer.WriteString("  /** Equal to */\n")
+	tsBuffer.WriteString("  eq?: Date;\n")
+	tsBuffer.WriteString("  /** Greater than or equal to */\n")
+	tsBuffer.WriteString("  gte?: Date;\n")
+	tsBuffer.WriteString("  /** Less than or equal to */\n")
+	tsBuffer.WriteString("  lte?: Date;\n")
+	tsBuffer.WriteString("  /** Greater than */\n")
+	tsBuffer.WriteString("  gt?: Date;\n")
+	tsBuffer.WriteString("  /** Less than */\n")
+	tsBuffer.WriteString("  lt?: Date;\n")
+	tsBuffer.WriteString("}\n\n")
+
+	// Add NumberRange type definition
+	tsBuffer.WriteString("/**\n")
+	tsBuffer.WriteString(" * NumberRange type for filtering by numeric ranges\n")
+	tsBuffer.WriteString(" */\n")
+	tsBuffer.WriteString("export interface NumberRange {\n")
+	tsBuffer.WriteString("  eq?: number;\n")
+	tsBuffer.WriteString("  gte?: number;\n")
+	tsBuffer.WriteString("  lte?: number;\n")
+	tsBuffer.WriteString("  gt?: number;\n")
+	tsBuffer.WriteString("  lt?: number;\n")
+	tsBuffer.WriteString("  min?: number;\n")
+	tsBuffer.WriteString("  max?: number;\n")
+	tsBuffer.WriteString("}\n\n")
+
+	// Add Currency and CurrencyRange type definitions
+	tsBuffer.WriteString("/**\n")
+	tsBuffer.WriteString(" * Currency type for representing monetary units\n")
+	tsBuffer.WriteString(" */\n")
+	tsBuffer.WriteString("export type Currency = 'USD' | 'EUR' | 'GBP' | string; // Allow other string values\n\n")
+	tsBuffer.WriteString("/**\n")
+	tsBuffer.WriteString(" * CurrencyRange type for filtering by currency ranges\n")
+	tsBuffer.WriteString(" */\n")
+	tsBuffer.WriteString("export interface CurrencyRange {\n")
+	tsBuffer.WriteString("  eq?: number;\n")
+	tsBuffer.WriteString("  gte?: number;\n")
+	tsBuffer.WriteString("  lte?: number;\n")
+	tsBuffer.WriteString("  gt?: number;\n")
+	tsBuffer.WriteString("  lt?: number;\n")
+	tsBuffer.WriteString("  min?: number;\n")
+	tsBuffer.WriteString("  max?: number;\n")
+	tsBuffer.WriteString("  currency?: Currency;\n")
+	tsBuffer.WriteString("}\n\n")
+
 	var allAdditionalTypes []string
 
 	// Iterate over all paths in matching order
@@ -152,12 +202,23 @@ func extractQueryParameters(operation *openapi3.Operation) []QueryParameter {
 	for _, paramRef := range operation.Parameters {
 		param := paramRef.Value
 		if param.In == "query" {
+			// Extract SDK type from extensions
+			sdkType := ""
+			if param.Extensions != nil {
+				if sdkTypeExt, ok := param.Extensions["x-gocart-sdk-type"]; ok {
+					if sdkTypeStr, ok := sdkTypeExt.(string); ok {
+						sdkType = sdkTypeStr
+					}
+				}
+			}
+
 			params = append(params, QueryParameter{
 				Name:        param.Name,
 				In:          param.In,
 				Description: param.Description,
 				Schema:      param.Schema,
 				Required:    param.Required,
+				SDKType:     sdkType,
 			})
 		}
 	}
@@ -248,6 +309,7 @@ func groupParameters(params []QueryParameter) map[string][]QueryParameter {
 				Description: param.Description,
 				Schema:      param.Schema,
 				Required:    param.Required,
+				SDKType:     param.SDKType,
 			})
 		} else {
 			// Treat as top-level parameter
@@ -288,11 +350,22 @@ func generateNestedInterface(name string, params []QueryParameter, doc *openapi3
 	buf.WriteString("{\n")
 	for _, param := range params {
 		// Add comments
-		buf.WriteString(fmt.Sprintf("    /**\n     * %s\n     */\n", param.Description))
+		if param.Description != "" {
+			buf.WriteString(fmt.Sprintf("    /**\n     * %s\n     */\n", param.Description))
+		}
 
-		// Determine TypeScript type
-		tsType, additional := resolveType(param.Schema, doc)
-		additionalTypes = append(additionalTypes, additional...)
+		// Determine TypeScript type - check SDKType first
+		var tsType string
+		var additional []string
+
+		if param.SDKType != "" {
+			tsType = param.SDKType
+		} else if param.Schema != nil {
+			tsType, additional = resolveType(param.Schema, doc)
+			additionalTypes = append(additionalTypes, additional...)
+		} else {
+			tsType = "any"
+		}
 
 		// Handle nullable fields
 		if param.Schema != nil && param.Schema.Value.Nullable {
@@ -313,7 +386,7 @@ func generateNestedInterface(name string, params []QueryParameter, doc *openapi3
 	return buf.String(), additionalTypes
 }
 
-// resolveType resolves the TypeScript type from an OpenAPI SchemaRef
+// resolveType resolves the TypeScript type from an OpenAPI schema
 func resolveType(schemaRef *openapi3.SchemaRef, doc *openapi3.T) (string, []string) {
 	var additionalTypes []string
 	if schemaRef == nil || schemaRef.Value == nil {

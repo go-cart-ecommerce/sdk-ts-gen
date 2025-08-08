@@ -1,0 +1,110 @@
+// Auto-generated TypeScript SDK
+// Do not modify manually.
+
+import { InMemoryContext } from './context';
+import { ApiError } from './error';
+import { toApiType, toClientType } from './utils';
+import { RequestInterceptor, ResponseInterceptor, InterceptorManager } from './interceptors';
+
+const SDK_VERSION = 'unset';
+
+export class GoCartSDK {
+  private baseUrl: string;
+
+  public context: InMemoryContext;
+  public interceptors: {
+    request: InterceptorManager<RequestInterceptor>;
+    response: InterceptorManager<ResponseInterceptor>;
+  };
+
+  constructor(baseUrl: string = 'https://api.orbita.al') {
+    this.baseUrl = baseUrl;
+    this.context = new InMemoryContext();
+    this.interceptors = {
+      request: new InterceptorManager<RequestInterceptor>(),
+      response: new InterceptorManager<ResponseInterceptor>()
+    };
+  }
+
+  /**
+   * listItems
+   * @param params ListItemsParams
+   * @returns Promise<any>
+   */
+  public async listItems(params: ListItemsParams = {}): Promise<any> {
+    const url = `${this.baseUrl}/items`;
+    let options: RequestInit = {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-gocart-sdk-version': SDK_VERSION,
+        // Add other headers like authentication here
+      },
+    };
+    if (params.totalCount) {
+      options.headers = {
+        ...options.headers,
+        'Collection-Total': 'include'
+      }
+    }
+    const queryString = new URLSearchParams();
+    if (params.filter) {
+      if (params.filter["createdAt"] !== undefined && params.filter["createdAt"] !== null) {
+        const dateRange = params.filter["createdAt"];
+        if (typeof dateRange === 'object' && dateRange !== null) {
+          if (dateRange.eq) { queryString.append('filter[created_at]', `${dateRange.eq.toISOString()}`); }
+          if (dateRange.gte) { queryString.append('filter[created_at]', `>=${dateRange.gte.toISOString()}`); }
+          if (dateRange.gt) { queryString.append('filter[created_at]', `>${dateRange.gt.toISOString()}`); }
+          if (dateRange.lte) { queryString.append('filter[created_at]', `<=${dateRange.lte.toISOString()}`); }
+          if (dateRange.lt) { queryString.append('filter[created_at]', `<${dateRange.lt.toISOString()}`); }
+        }
+      }
+      if (params.filter["updatedAt"] !== undefined && params.filter["updatedAt"] !== null) {
+        const dateRange = params.filter["updatedAt"];
+        if (typeof dateRange === 'object' && dateRange !== null) {
+          if (dateRange.eq) { queryString.append('filter[updated_at]', `${dateRange.eq.toISOString()}`); }
+          if (dateRange.gte) { queryString.append('filter[updated_at]', `>=${dateRange.gte.toISOString()}`); }
+          if (dateRange.gt) { queryString.append('filter[updated_at]', `>${dateRange.gt.toISOString()}`); }
+          if (dateRange.lte) { queryString.append('filter[updated_at]', `<=${dateRange.lte.toISOString()}`); }
+          if (dateRange.lt) { queryString.append('filter[updated_at]', `<${dateRange.lt.toISOString()}`); }
+        }
+      }
+      if (params.filter["name"] !== undefined && params.filter["name"] !== null) {
+        queryString.append('filter[name]', String(params.filter["name"]));
+      }
+    }
+    let finalUrl = queryString.toString() ? `${url}?${queryString.toString()}` : url;
+    options = this.context.setHttpRequestHeaders(options);
+    // Apply request interceptors
+    for (const interceptor of this.interceptors.request.interceptors) {
+      const result = await interceptor(options, finalUrl);
+      if (result) {
+        if (result.options) options = result.options;
+        if (result.url) finalUrl = result.url;
+      }
+    }
+
+    let response = await fetch(finalUrl, options);
+    // Apply response interceptors
+    for (const interceptor of this.interceptors.response.interceptors) {
+      const result = await interceptor(response, options, finalUrl);
+      if (result) {
+        response = result;
+      }
+    }
+
+    if (response.status === 204) {
+      return {} as any;
+    }
+
+    if (!response.ok) {
+      const errMessage = await response.json();
+      const err = toClientType(errMessage);
+      throw new ApiError(err.code, err.message, err.fieldErrors);
+    }
+    const data = await response.json();
+    // Transform keys to camelCase and recursively convert nested objects
+    return toClientType(data);
+  }
+
+}

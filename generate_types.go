@@ -21,14 +21,16 @@ func getTypeDefinitions(doc *openapi3.T) []TypeDefinition {
 
 	// Ensure consistent output order
 	var schemaNames []string
-	for name := range doc.Components.Schemas {
-		schemaNames = append(schemaNames, name)
-	}
-	sort.Strings(schemaNames)
+	if doc.Components != nil {
+		for name := range doc.Components.Schemas {
+			schemaNames = append(schemaNames, name)
+		}
+		sort.Strings(schemaNames)
 
-	for _, schemaName := range schemaNames {
-		schemaRef := doc.Components.Schemas[schemaName]
-		typeDefs = append(typeDefs, TypeDefinition{Name: toPascalCase(schemaName), SchemaRef: schemaRef})
+		for _, schemaName := range schemaNames {
+			schemaRef := doc.Components.Schemas[schemaName]
+			typeDefs = append(typeDefs, TypeDefinition{Name: toPascalCase(schemaName), SchemaRef: schemaRef})
+		}
 	}
 
 	// generate types for request bodies

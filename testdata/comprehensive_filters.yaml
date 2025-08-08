@@ -1,0 +1,94 @@
+openapi: 3.0.3
+info:
+  title: Comprehensive Filters Test API
+  version: '1.0.0'
+servers:
+  - url: https://api.test.com
+
+paths:
+  /users:
+    get:
+      operationId: listUsers
+      parameters:
+        - in: query
+          name: filter[email]
+          schema:
+            type: string
+          description: Filter by user email.
+        - in: query
+          name: filter[role]
+          schema:
+            type: string
+          description: Filter by user role.
+        - in: query
+          name: filter[search]
+          schema:
+            type: string
+          description: General search across user fields.
+        - in: query
+          name: filter[is_blocked]
+          schema:
+            type: boolean
+          description: Filter by blocked status.
+        - in: query
+          name: filter[is_email_verified]
+          schema:
+            type: boolean
+          description: Filter by email verification status.
+        - in: query
+          name: filter[group_id]
+          schema:
+            type: string
+            format: uuid
+          description: Filter by group membership.
+        - in: query
+          name: filter[client_registration_date]
+          schema:
+            type: string
+          description: Filter by client registration date.
+          x-gocart-sdk-type: DateRange
+        - in: query
+          name: filter[order_count]
+          schema:
+            type: string
+          description: Filter by order count.
+          x-gocart-sdk-type: NumberRange
+        - in: query
+          name: filter[order_amount]
+          schema:
+            type: string
+          description: Filter by order amount.
+          x-gocart-sdk-type: CurrencyRange
+        - in: query
+          name: filter[cart_article_count]
+          schema:
+            type: string
+          description: Filter by cart article count.
+          x-gocart-sdk-type: NumberRange
+        - in: query
+          name: page[number]
+          schema:
+            type: integer
+          description: Page number.
+        - in: query
+          name: page[size]
+          schema:
+            type: integer
+          description: Page size.
+        - in: query
+          name: sort
+          schema:
+            type: string
+          description: Sort fields.
+        - in: query
+          name: include
+          schema:
+            type: string
+          description: Include relationships.
+      responses:
+        '200':
+          description: Users list
+          content:
+            application/json:
+              schema:
+                type: object 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -10,18 +11,27 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 )
 
+const version = "1.0.0"
+
 var (
-	docPath   string
-	outputDir string
+	docPath     string
+	outputDir   string
+	showVersion bool
 )
 
 func init() {
 	flag.StringVar(&docPath, "doc", "-", "Path to the OpenAPI document file. Use '-' to read from stdin.")
 	flag.StringVar(&outputDir, "o", "./src", "Output directory where the generated files will be placed.")
+	flag.BoolVar(&showVersion, "version", false, "Show version information and exit.")
 }
 
 func main() {
 	flag.Parse()
+
+	if showVersion {
+		fmt.Printf("sdk-ts-gen version %s\n", version)
+		os.Exit(0)
+	}
 
 	var docData []byte
 	var err error

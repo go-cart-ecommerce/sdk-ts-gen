@@ -18,6 +18,7 @@ type QueryParameter struct {
 	Description string
 	Schema      *openapi3.SchemaRef
 	Required    bool
+	SDKType     string // Stores the x-gocart-sdk-type extension value
 }
 
 type MethodDefinition struct {
@@ -341,12 +342,24 @@ func extractParameters(operation *openapi3.Operation) map[string][]QueryParamete
 			continue
 		}
 		param := paramRef.Value
+
+		// Extract SDK type from extensions
+		sdkType := ""
+		if param.Extensions != nil {
+			if sdkTypeExt, ok := param.Extensions["x-gocart-sdk-type"]; ok {
+				if sdkTypeStr, ok := sdkTypeExt.(string); ok {
+					sdkType = sdkTypeStr
+				}
+			}
+		}
+
 		p := QueryParameter{
 			Name:        param.Name,
 			In:          param.In,
 			Description: param.Description,
 			Schema:      param.Schema,
 			Required:    param.Required,
+			SDKType:     sdkType,
 		}
 		groupedParams[param.In] = append(groupedParams[param.In], p)
 	}
@@ -361,6 +374,7 @@ func extractParameters(operation *openapi3.Operation) map[string][]QueryParamete
 				Description: "Request body",
 				Schema:      appJSON.Schema,
 				Required:    operation.RequestBody.Value.Required,
+				SDKType:     "",
 			}
 			groupedParams["body"] = append(groupedParams["body"], p)
 		}
@@ -398,6 +412,11 @@ func determineResponseType(operation *openapi3.Operation) (string, *openapi3.Sch
 				}
 			}
 		}
+	}
+
+	// If no other success response is found, check for 204
+	if respRef := operation.Responses.Status(204); respRef != nil {
+		return "void", nil
 	}
 
 	// Fallback to 'any' if no suitable response found
@@ -540,6 +559,97 @@ func getEmbeddedKeysFromSchema(schema *openapi3.SchemaRef) []string {
 	}
 
 	return embeddedObjects
+}
+
+func generateRangeQueryBuilder(paramName, camelKey, sdkType, queryKey string) string {
+	var b strings.Builder
+	var valueVar string
+
+	switch sdkType {
+	case "DateRange":
+		valueVar = "dateRange"
+		b.WriteString(fmt.Sprintf("        const %s = %s.filter[\"%s\"];\n", valueVar, paramName, camelKey))
+		b.WriteString(fmt.Sprintf("        if (typeof %s === 'object' && %s !== null) {\n", valueVar, valueVar))
+		b.WriteString(fmt.Sprintf("          if (%s.eq) { queryString.append('%s', `${%s.eq.toISOString()}`); }\n", valueVar, queryKey, valueVar))
+		b.WriteString(fmt.Sprintf("          if (%s.gte) { queryString.append('%s', `>=${%s.gte.toISOString()}`); }\n", valueVar, queryKey, valueVar))
+		b.WriteString(fmt.Sprintf("          if (%s.gt) { queryString.append('%s', `>${%s.gt.toISOString()}`); }\n", valueVar, queryKey, valueVar))
+		b.WriteString(fmt.Sprintf("          if (%s.lte) { queryString.append('%s', `<=${%s.lte.toISOString()}`); }\n", valueVar, queryKey, valueVar))
+		b.WriteString(fmt.Sprintf("          if (%s.lt) { queryString.append('%s', `<${%s.lt.toISOString()}`); }\n", valueVar, queryKey, valueVar))
+		b.WriteString("        }\n")
+	case "NumberRange":
+		valueVar = "numberRange"
+		b.WriteString(fmt.Sprintf("        const %s = %s.filter[\"%s\"];\n", valueVar, paramName, camelKey))
+		b.WriteString(fmt.Sprintf("        if (typeof %s === 'object' && %s !== null) {\n", valueVar, valueVar))
+		b.WriteString(fmt.Sprintf("          const range = %s as any;\n", valueVar))
+		b.WriteString(fmt.Sprintf("          if (range.eq !== undefined) { queryString.append('%s', `${range.eq}`); }\n", queryKey))
+		b.WriteString(fmt.Sprintf("          if (range.gte !== undefined) { queryString.append('%s', `>=${range.gte}`); }\n", queryKey))
+		b.WriteString(fmt.Sprintf("          if (range.gt !== undefined) { queryString.append('%s', `>${range.gt}`); }\n", queryKey))
+		b.WriteString(fmt.Sprintf("          if (range.lte !== undefined) { queryString.append('%s', `<=${range.lte}`); }\n", queryKey))
+		b.WriteString(fmt.Sprintf("          if (range.lt !== undefined) { queryString.append('%s', `<${range.lt}`); }\n", queryKey))
+		b.WriteString(fmt.Sprintf("          if (range.min !== undefined || range.max !== undefined) {\n"))
+		b.WriteString(fmt.Sprintf("            const min = range.min ?? '';\n"))
+		b.WriteString(fmt.Sprintf("            const max = range.max ?? '';\n"))
+		b.WriteString(fmt.Sprintf("            queryString.append('%s', `${min}..${max}`);\n", queryKey))
+		b.WriteString("          }\n")
+		b.WriteString("        }\n")
+	case "CurrencyRange":
+		valueVar = "currencyRange"
+		b.WriteString(fmt.Sprintf("        const %s = %s.filter[\"%s\"];\n", valueVar, paramName, camelKey))
+		b.WriteString(fmt.Sprintf("        if (typeof %s === 'object' && %s !== null) {\n", valueVar, valueVar))
+		b.WriteString(fmt.Sprintf("          const range = %s as any;\n", valueVar))
+		b.WriteString(fmt.Sprintf("          if (range.eq !== undefined) {\n"))
+		b.WriteString(fmt.Sprintf("            const valueStr = `${range.eq}`;\n"))
+		b.WriteString(fmt.Sprintf("            if (range.currency) {\n"))
+		b.WriteString(fmt.Sprintf("              queryString.append('%s', `${range.currency}:${valueStr}`);\n", queryKey))
+		b.WriteString("            } else {\n")
+		b.WriteString(fmt.Sprintf("              queryString.append('%s', valueStr);\n", queryKey))
+		b.WriteString("            }\n")
+		b.WriteString("          }\n")
+		b.WriteString(fmt.Sprintf("          if (range.gte !== undefined) {\n"))
+		b.WriteString(fmt.Sprintf("            const valueStr = `>=${range.gte}`;\n"))
+		b.WriteString(fmt.Sprintf("            if (range.currency) {\n"))
+		b.WriteString(fmt.Sprintf("              queryString.append('%s', `${range.currency}:${valueStr}`);\n", queryKey))
+		b.WriteString("            } else {\n")
+		b.WriteString(fmt.Sprintf("              queryString.append('%s', valueStr);\n", queryKey))
+		b.WriteString("            }\n")
+		b.WriteString("          }\n")
+		b.WriteString(fmt.Sprintf("          if (range.gt !== undefined) {\n"))
+		b.WriteString(fmt.Sprintf("            const valueStr = `>${range.gt}`;\n"))
+		b.WriteString(fmt.Sprintf("            if (range.currency) {\n"))
+		b.WriteString(fmt.Sprintf("              queryString.append('%s', `${range.currency}:${valueStr}`);\n", queryKey))
+		b.WriteString("            } else {\n")
+		b.WriteString(fmt.Sprintf("              queryString.append('%s', valueStr);\n", queryKey))
+		b.WriteString("            }\n")
+		b.WriteString("          }\n")
+		b.WriteString(fmt.Sprintf("          if (range.lte !== undefined) {\n"))
+		b.WriteString(fmt.Sprintf("            const valueStr = `<=${range.lte}`;\n"))
+		b.WriteString(fmt.Sprintf("            if (range.currency) {\n"))
+		b.WriteString(fmt.Sprintf("              queryString.append('%s', `${range.currency}:${valueStr}`);\n", queryKey))
+		b.WriteString("            } else {\n")
+		b.WriteString(fmt.Sprintf("              queryString.append('%s', valueStr);\n", queryKey))
+		b.WriteString("            }\n")
+		b.WriteString("          }\n")
+		b.WriteString(fmt.Sprintf("          if (range.lt !== undefined) {\n"))
+		b.WriteString(fmt.Sprintf("            const valueStr = `<${range.lt}`;\n"))
+		b.WriteString(fmt.Sprintf("            if (range.currency) {\n"))
+		b.WriteString(fmt.Sprintf("              queryString.append('%s', `${range.currency}:${valueStr}`);\n", queryKey))
+		b.WriteString("            } else {\n")
+		b.WriteString(fmt.Sprintf("              queryString.append('%s', valueStr);\n", queryKey))
+		b.WriteString("            }\n")
+		b.WriteString("          }\n")
+		b.WriteString(fmt.Sprintf("          if (range.min !== undefined || range.max !== undefined) {\n"))
+		b.WriteString(fmt.Sprintf("            const min = range.min ?? '';\n"))
+		b.WriteString(fmt.Sprintf("            const max = range.max ?? '';\n"))
+		b.WriteString("            const valueStr = `${min}..${max}`;\n")
+		b.WriteString(fmt.Sprintf("            if (range.currency) {\n"))
+		b.WriteString(fmt.Sprintf("              queryString.append('%s', `${range.currency}:${valueStr}`);\n", queryKey))
+		b.WriteString("            } else {\n")
+		b.WriteString(fmt.Sprintf("              queryString.append('%s', valueStr);\n", queryKey))
+		b.WriteString("            }\n")
+		b.WriteString("          }\n")
+		b.WriteString("        }\n")
+	}
+	return b.String()
 }
 
 // generateMethod creates a TypeScript method within the GoCartSDK class
@@ -700,11 +810,12 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 			switch {
 			case strings.HasPrefix(qp.Name, "filter["):
 				filterParams = append(filterParams, QueryParameter{
-					Name:        toCamelCase(qp.Name),
+					Name:        qp.Name, // Keep original parameter name for query string
 					In:          "query",
 					Description: qp.Description,
 					Schema:      qp.Schema,
 					Required:    qp.Required,
+					SDKType:     qp.SDKType,
 				})
 			case qp.Name == "sort":
 				sortParams = append(sortParams, qp)
@@ -727,22 +838,19 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 		if len(filterParams) > 0 {
 			buf.WriteString(fmt.Sprintf("    if (%s.filter) {\n", paramName))
 			for _, fp := range filterParams {
-				// Extract key from 'filter[key]'
-				parent, key := parseBracketParam(fp.Name)
-				if parent == "" || key == "" {
-					// Fallback to regular access
-					camelQP := toCamelCase(fp.Name)
-					buf.WriteString(fmt.Sprintf("      if (%s.%s !== undefined && %s.%s !== null) {\n", paramName, camelQP, paramName, camelQP))
-					buf.WriteString(fmt.Sprintf("        queryString.append('%slesh', String(%s.%s));\n", fp.Name, paramName, camelQP))
-					buf.WriteString("      }\n")
-					continue
-				}
+				_, key := parseBracketParam(fp.Name)
+				camelKey := toCamelCase(key)
 
-				camelParent := toCamelCase(parent)
-				// camelKey := toCamelCase(key) // Not used in this context
-				buf.WriteString(fmt.Sprintf("      if (%s.%s[\"%s\"] !== undefined && %s.%s[\"%s\"] !== null) {\n", paramName, camelParent, key, paramName, camelParent, key))
-				buf.WriteString(fmt.Sprintf("        queryString.append('%s[%s]', String(%s.%s[\"%s\"]));\n", camelParent, toSnakeCase(key), paramName, camelParent, key))
-				buf.WriteString("      }\n")
+				if fp.SDKType == "DateRange" || fp.SDKType == "NumberRange" || fp.SDKType == "CurrencyRange" {
+					buf.WriteString(fmt.Sprintf("      if (%s.filter[\"%s\"] !== undefined && %s.filter[\"%s\"] !== null) {\n", paramName, camelKey, paramName, camelKey))
+					buf.WriteString(generateRangeQueryBuilder(paramName, camelKey, fp.SDKType, fp.Name))
+					buf.WriteString("      }\n")
+				} else {
+					// Handle other filter types (string, boolean, uuid, etc.)
+					buf.WriteString(fmt.Sprintf("      if (%s.filter[\"%s\"] !== undefined && %s.filter[\"%s\"] !== null) {\n", paramName, camelKey, paramName, camelKey))
+					buf.WriteString(fmt.Sprintf("        queryString.append('%s', String(%s.filter[\"%s\"]));\n", fp.Name, paramName, camelKey))
+					buf.WriteString("      }\n")
+				}
 			}
 			buf.WriteString("    }\n")
 		}
@@ -805,13 +913,20 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 	buf.WriteString("        response = result;\n")
 	buf.WriteString("      }\n")
 	buf.WriteString("    }\n\n")
+	buf.WriteString("    if (response.status === 204) {\n")
+	if methodDefinition.ResponseType == "void" {
+		buf.WriteString("      return;\n")
+	} else {
+		buf.WriteString("      return {} as any;\n")
+	}
+	buf.WriteString("    }\n\n")
 	buf.WriteString("    if (!response.ok) {\n")
-	buf.WriteString("      const errMessage: APIError = await response.json();\n")
-	buf.WriteString("      throw new ApiError(errMessage.code, errMessage.message, errMessage.fieldErrors);\n")
+	buf.WriteString("      const errMessage = await response.json();\n")
+	buf.WriteString("      const err = toClientType(errMessage);\n")
+	buf.WriteString("      throw new ApiError(err.code, err.message, err.fieldErrors);\n")
 	buf.WriteString("    }\n")
-
 	// Handle No Content responses (e.g., 204 No Content)
-	if methodDefinition.ResponseType == "any" || methodDefinition.ResponseType == "void" {
+	if methodDefinition.ResponseType == "void" {
 		buf.WriteString("    return;\n")
 	} else if methodDefinition.ResponseType == "Blob" {
 		buf.WriteString("    // Handle binary response\n")
@@ -828,9 +943,9 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 	return buf.String()
 }
 
-// parseBracketParam splits a parameter name like "filter[id]" into "filter" and "id"
+// parseBracketParam splits a parameter name like "filter[id]" into "filter" and "id" (supports underscores)
 func parseBracketParam(param string) (parent, key string) {
-	re := regexp.MustCompile(`(\w+)\[(\w+)\]`)
+	re := regexp.MustCompile(`(\w+)\[([^\]]+)\]`)
 	matches := re.FindStringSubmatch(param)
 	if len(matches) == 3 {
 		return matches[1], matches[2]
@@ -874,8 +989,9 @@ func toCamelCase(input string) string {
 			// Ensure the first part is lowercase
 			parts[i] = strings.ToLower(part)
 		} else {
-			// Title case for subsequent parts
-			parts[i] = strings.Title(part)
+			if len(part) > 0 {
+				parts[i] = strings.ToUpper(part[:1]) + strings.ToLower(part[1:])
+			}
 		}
 	}
 	return strings.Join(parts, "")
@@ -932,14 +1048,15 @@ func isAllUpper(s string) bool {
 // isPrimitiveType checks if a TypeScript type is primitive
 func isPrimitiveType(tsType string) bool {
 	primitiveTypes := map[string]struct{}{
-		"string":  {},
-		"number":  {},
-		"boolean": {},
-		"null":    {},
-		"any":     {},
-		"any[]":   {},
-		"void":    {},
-		"Blob":    {},
+		"string":    {},
+		"number":    {},
+		"boolean":   {},
+		"null":      {},
+		"any":       {},
+		"any[]":     {},
+		"void":      {},
+		"Blob":      {},
+		"DateRange": {},
 	}
 	_, exists := primitiveTypes[tsType]
 	return exists
