@@ -382,26 +382,26 @@ func TestComprehensiveFiltersGeneration(t *testing.T) {
 			name:     "NumberRange filter - cart article count",
 			contains: `const numberRange = params.filter["cartArticleCount"];`,
 		},
-		// Non-range filters should use simple string conversion
+		// Non-range filters should use formatFilterValue function
 		{
 			name:     "String filter - email",
-			contains: `queryString.append('filter[email]', String(params.filter["email"]));`,
+			contains: `queryString.append('filter[email]', this.formatFilterValue(value));`,
 		},
 		{
 			name:     "String filter - role",
-			contains: `queryString.append('filter[role]', String(params.filter["role"]));`,
+			contains: `queryString.append('filter[role]', this.formatFilterValue(value));`,
 		},
 		{
 			name:     "Boolean filter - is_blocked",
-			contains: `queryString.append('filter[is_blocked]', String(params.filter["isBlocked"]));`,
+			contains: `queryString.append('filter[is_blocked]', this.formatFilterValue(value));`,
 		},
 		{
 			name:     "Boolean filter - is_email_verified",
-			contains: `queryString.append('filter[is_email_verified]', String(params.filter["isEmailVerified"]));`,
+			contains: `queryString.append('filter[is_email_verified]', this.formatFilterValue(value));`,
 		},
 		{
 			name:     "UUID filter - group_id",
-			contains: `queryString.append('filter[group_id]', String(params.filter["groupId"]));`,
+			contains: `queryString.append('filter[group_id]', this.formatFilterValue(value));`,
 		},
 		// Check that range operators are generated correctly
 		{

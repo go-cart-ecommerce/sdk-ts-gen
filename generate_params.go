@@ -105,6 +105,15 @@ func generateParams(doc *openapi3.T, paramDefs []ParamDefinition) []byte {
 	tsBuffer.WriteString("  currency?: Currency;\n")
 	tsBuffer.WriteString("}\n\n")
 
+	// Add RetryRequest type definition
+	tsBuffer.WriteString("/**\n")
+	tsBuffer.WriteString(" * RetryRequest type for interceptor retry capability\n")
+	tsBuffer.WriteString(" */\n")
+	tsBuffer.WriteString("export interface RetryRequest {\n")
+	tsBuffer.WriteString("  url: string;\n")
+	tsBuffer.WriteString("  options: RequestInit;\n")
+	tsBuffer.WriteString("}\n\n")
+
 	var allAdditionalTypes []string
 
 	// Iterate over all paths in matching order

@@ -27,23 +27,84 @@ export class GoCartSDK {
   }
 
   /**
+   * Format filter values, converting camelCase strings to snake_case
+   * @private
+   */
+  private formatFilterValue(value: any): string {
+    let formattedValue = String(value);
+    // Convert camelCase string values to snake_case
+    if (typeof value === 'string' && formattedValue !== formattedValue.toLowerCase()) {
+      formattedValue = formattedValue.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
+    }
+    return formattedValue;
+  }
+
+  /**
+   * Execute a request with interceptor support and retry capability
+   * @private
+   */
+  private async executeRequest(url: string, options: RequestInit): Promise<Response> {
+    let finalUrl = url;
+    let currentOptions = { ...options };
+
+    // Apply request interceptors
+    for (const interceptor of this.interceptors.request.interceptors) {
+      const result = await interceptor(currentOptions, finalUrl);
+      if (result) {
+        if (result.options) currentOptions = result.options;
+        if (result.url) finalUrl = result.url;
+      }
+    }
+
+    // Make the request
+    let response = await fetch(finalUrl, currentOptions);
+
+    // Apply response interceptors
+    for (const interceptor of this.interceptors.response.interceptors) {
+      const result = await interceptor(response, currentOptions, finalUrl);
+      if (result) {
+        // Check if the interceptor returned a retry request
+        if (this.isRetryRequest(result)) {
+          // Recursively execute the retry request
+          return this.executeRequest(result.url, result.options);
+        } else {
+          // Replace the response with the modified one
+          response = result;
+        }
+      }
+    }
+
+    return response;
+  }
+
+  /**
+   * Type guard to check if the result is a RetryRequest
+   * @private
+   */
+  private isRetryRequest(result: Response | RetryRequest): result is RetryRequest {
+    return (result as RetryRequest).url !== undefined && (result as RetryRequest).options !== undefined;
+  }
+
+  /**
    * listItems
    * @param params ListItemsParams
+   * @param options Optional request configuration including abort signal
    * @returns Promise<any>
    */
-  public async listItems(params: ListItemsParams = {}): Promise<any> {
+  public async listItems(params: ListItemsParams = {}, options?: { signal?: AbortSignal }): Promise<any> {
     const url = `${this.baseUrl}/items`;
-    let options: RequestInit = {
+    let requestOptions: RequestInit = {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
         'x-gocart-sdk-version': SDK_VERSION,
         // Add other headers like authentication here
       },
+      signal: options?.signal,
     };
     if (params.totalCount) {
-      options.headers = {
-        ...options.headers,
+      requestOptions.headers = {
+        ...requestOptions.headers,
         'Collection-Total': 'include'
       }
     }
@@ -70,28 +131,13 @@ export class GoCartSDK {
         }
       }
       if (params.filter["name"] !== undefined && params.filter["name"] !== null) {
-        queryString.append('filter[name]', String(params.filter["name"]));
+        const value = params.filter["name"];
+        queryString.append('filter[name]', this.formatFilterValue(value));
       }
     }
     let finalUrl = queryString.toString() ? `${url}?${queryString.toString()}` : url;
-    options = this.context.setHttpRequestHeaders(options);
-    // Apply request interceptors
-    for (const interceptor of this.interceptors.request.interceptors) {
-      const result = await interceptor(options, finalUrl);
-      if (result) {
-        if (result.options) options = result.options;
-        if (result.url) finalUrl = result.url;
-      }
-    }
-
-    let response = await fetch(finalUrl, options);
-    // Apply response interceptors
-    for (const interceptor of this.interceptors.response.interceptors) {
-      const result = await interceptor(response, options, finalUrl);
-      if (result) {
-        response = result;
-      }
-    }
+    requestOptions = this.context.setHttpRequestHeaders(requestOptions);
+    const response = await this.executeRequest(finalUrl, requestOptions);
 
     if (response.status === 204) {
       return {} as any;

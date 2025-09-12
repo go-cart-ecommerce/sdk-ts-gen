@@ -285,6 +285,7 @@ func generateSDK(doc *openapi3.T, typeDefinitions []TypeDefinition, paramDefinit
 		for _, tsType := range importParams {
 			tsBuffer.WriteString(fmt.Sprintf("  %s,\n", tsType))
 		}
+		tsBuffer.WriteString("  RetryRequest,\n")
 		tsBuffer.WriteString("} from './params';\n\n")
 	}
 
@@ -311,6 +312,71 @@ func generateSDK(doc *openapi3.T, typeDefinitions []TypeDefinition, paramDefinit
 	tsBuffer.WriteString("      response: new InterceptorManager<ResponseInterceptor>()\n")
 	tsBuffer.WriteString("    };\n")
 	tsBuffer.WriteString("  }\n\n")
+
+	// Add formatFilterValue helper method
+	tsBuffer.WriteString("  /**\n")
+	tsBuffer.WriteString("   * Format filter values, converting camelCase strings to snake_case\n")
+	tsBuffer.WriteString("   * @private\n")
+	tsBuffer.WriteString("   */\n")
+	tsBuffer.WriteString("  private formatFilterValue(value: any): string {\n")
+	tsBuffer.WriteString("    let formattedValue = String(value);\n")
+	tsBuffer.WriteString("    // Convert camelCase string values to snake_case\n")
+	tsBuffer.WriteString("    if (typeof value === 'string' && formattedValue !== formattedValue.toLowerCase()) {\n")
+	tsBuffer.WriteString("      formattedValue = formattedValue.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();\n")
+	tsBuffer.WriteString("    }\n")
+	tsBuffer.WriteString("    return formattedValue;\n")
+	tsBuffer.WriteString("  }\n")
+	tsBuffer.WriteString("\n")
+
+	// Add executeRequest method
+	tsBuffer.WriteString("  /**\n")
+	tsBuffer.WriteString("   * Execute a request with interceptor support and retry capability\n")
+	tsBuffer.WriteString("   * @private\n")
+	tsBuffer.WriteString("   */\n")
+	tsBuffer.WriteString("  private async executeRequest(url: string, options: RequestInit): Promise<Response> {\n")
+	tsBuffer.WriteString("    let finalUrl = url;\n")
+	tsBuffer.WriteString("    let currentOptions = { ...options };\n")
+	tsBuffer.WriteString("\n")
+	tsBuffer.WriteString("    // Apply request interceptors\n")
+	tsBuffer.WriteString("    for (const interceptor of this.interceptors.request.interceptors) {\n")
+	tsBuffer.WriteString("      const result = await interceptor(currentOptions, finalUrl);\n")
+	tsBuffer.WriteString("      if (result) {\n")
+	tsBuffer.WriteString("        if (result.options) currentOptions = result.options;\n")
+	tsBuffer.WriteString("        if (result.url) finalUrl = result.url;\n")
+	tsBuffer.WriteString("      }\n")
+	tsBuffer.WriteString("    }\n")
+	tsBuffer.WriteString("\n")
+	tsBuffer.WriteString("    // Make the request\n")
+	tsBuffer.WriteString("    let response = await fetch(finalUrl, currentOptions);\n")
+	tsBuffer.WriteString("\n")
+	tsBuffer.WriteString("    // Apply response interceptors\n")
+	tsBuffer.WriteString("    for (const interceptor of this.interceptors.response.interceptors) {\n")
+	tsBuffer.WriteString("      const result = await interceptor(response, currentOptions, finalUrl);\n")
+	tsBuffer.WriteString("      if (result) {\n")
+	tsBuffer.WriteString("        // Check if the interceptor returned a retry request\n")
+	tsBuffer.WriteString("        if (this.isRetryRequest(result)) {\n")
+	tsBuffer.WriteString("          // Recursively execute the retry request\n")
+	tsBuffer.WriteString("          return this.executeRequest(result.url, result.options);\n")
+	tsBuffer.WriteString("        } else {\n")
+	tsBuffer.WriteString("          // Replace the response with the modified one\n")
+	tsBuffer.WriteString("          response = result;\n")
+	tsBuffer.WriteString("        }\n")
+	tsBuffer.WriteString("      }\n")
+	tsBuffer.WriteString("    }\n")
+	tsBuffer.WriteString("\n")
+	tsBuffer.WriteString("    return response;\n")
+	tsBuffer.WriteString("  }\n")
+	tsBuffer.WriteString("\n")
+
+	// Add isRetryRequest type guard
+	tsBuffer.WriteString("  /**\n")
+	tsBuffer.WriteString("   * Type guard to check if the result is a RetryRequest\n")
+	tsBuffer.WriteString("   * @private\n")
+	tsBuffer.WriteString("   */\n")
+	tsBuffer.WriteString("  private isRetryRequest(result: Response | RetryRequest): result is RetryRequest {\n")
+	tsBuffer.WriteString("    return (result as RetryRequest).url !== undefined && (result as RetryRequest).options !== undefined;\n")
+	tsBuffer.WriteString("  }\n")
+	tsBuffer.WriteString("\n")
 
 	for _, m := range methodDefinitions {
 		mthodCode := generateMethod(doc, m)
@@ -662,6 +728,7 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 	for _, p := range methodDefinition.Arguments {
 		buf.WriteString(fmt.Sprintf("   * @param %s %s\n", p.Name, p.Type.Name))
 	}
+	buf.WriteString("   * @param options Optional request configuration including abort signal\n")
 	buf.WriteString(fmt.Sprintf("   * @returns Promise<%s>\n", methodDefinition.ResponseType))
 	buf.WriteString("   */\n")
 
@@ -674,6 +741,8 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 			paramsSignature = append(paramsSignature, fmt.Sprintf("%s: %s", p.Name, p.Type.Name))
 		}
 	}
+	// Add optional options parameter
+	paramsSignature = append(paramsSignature, "options?: { signal?: AbortSignal }")
 	buf.WriteString(fmt.Sprintf("  public async %s(%s): Promise<%s> {\n", methodDefinition.Name, strings.Join(paramsSignature, ", "), methodDefinition.ResponseType))
 
 	// Construct URL with path parameters
@@ -729,7 +798,7 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 			}
 
 			// Initialize options for fetch
-			buf.WriteString("    let options: RequestInit = {\n")
+			buf.WriteString("    let requestOptions: RequestInit = {\n")
 			buf.WriteString(fmt.Sprintf("      method: '%s',\n", strings.ToUpper(methodDefinition.HTTPMethod)))
 			buf.WriteString("      headers: {\n")
 			buf.WriteString("        'Content-Type': 'application/json',\n")
@@ -741,6 +810,7 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 				buf.WriteString("      body: JSON.stringify(body),\n")
 			}
 
+			buf.WriteString("      signal: options?.signal,\n")
 			buf.WriteString("    };\n")
 		}
 
@@ -763,7 +833,7 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 			}
 
 			buf.WriteString("    // Configure the fetch options\n")
-			buf.WriteString("    let options: RequestInit = {\n")
+			buf.WriteString("    let requestOptions: RequestInit = {\n")
 			buf.WriteString(fmt.Sprintf("      method: '%s',\n", strings.ToUpper(methodDefinition.HTTPMethod)))
 			buf.WriteString("      headers: {\n")
 			buf.WriteString("        // Do not set 'Content-Type' header when sending FormData\n")
@@ -773,25 +843,27 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 			buf.WriteString("        // Add other headers like authentication here\n")
 			buf.WriteString("      },\n")
 			buf.WriteString("      body: formData,\n")
+			buf.WriteString("      signal: options?.signal,\n")
 			buf.WriteString("    };\n")
 
 		}
 	} else {
 		// Initialize options for fetch
-		buf.WriteString("    let options: RequestInit = {\n")
+		buf.WriteString("    let requestOptions: RequestInit = {\n")
 		buf.WriteString(fmt.Sprintf("      method: '%s',\n", strings.ToUpper(methodDefinition.HTTPMethod)))
 		buf.WriteString("      headers: {\n")
 		buf.WriteString("        'Content-Type': 'application/json',\n")
 		buf.WriteString("        'x-gocart-sdk-version': SDK_VERSION,\n")
 		buf.WriteString("        // Add other headers like authentication here\n")
 		buf.WriteString("      },\n")
+		buf.WriteString("      signal: options?.signal,\n")
 		buf.WriteString("    };\n")
 	}
 
 	if strings.HasPrefix(methodDefinition.Name, "list") {
 		buf.WriteString("    if (params.totalCount) {\n")
-		buf.WriteString("      options.headers = {\n")
-		buf.WriteString("        ...options.headers,\n")
+		buf.WriteString("      requestOptions.headers = {\n")
+		buf.WriteString("        ...requestOptions.headers,\n")
 		buf.WriteString("        'Collection-Total': 'include'\n")
 		buf.WriteString("      }\n")
 		buf.WriteString("    }\n")
@@ -840,15 +912,19 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 			for _, fp := range filterParams {
 				_, key := parseBracketParam(fp.Name)
 				camelKey := toCamelCase(key)
+				// Convert camelCase key to snake_case for query parameter
+				snakeKey := toSnakeCase(key)
+				queryParamName := fmt.Sprintf("filter[%s]", snakeKey)
 
 				if fp.SDKType == "DateRange" || fp.SDKType == "NumberRange" || fp.SDKType == "CurrencyRange" {
 					buf.WriteString(fmt.Sprintf("      if (%s.filter[\"%s\"] !== undefined && %s.filter[\"%s\"] !== null) {\n", paramName, camelKey, paramName, camelKey))
-					buf.WriteString(generateRangeQueryBuilder(paramName, camelKey, fp.SDKType, fp.Name))
+					buf.WriteString(generateRangeQueryBuilder(paramName, camelKey, fp.SDKType, queryParamName))
 					buf.WriteString("      }\n")
 				} else {
 					// Handle other filter types (string, boolean, uuid, etc.)
 					buf.WriteString(fmt.Sprintf("      if (%s.filter[\"%s\"] !== undefined && %s.filter[\"%s\"] !== null) {\n", paramName, camelKey, paramName, camelKey))
-					buf.WriteString(fmt.Sprintf("        queryString.append('%s', String(%s.filter[\"%s\"]));\n", fp.Name, paramName, camelKey))
+					buf.WriteString(fmt.Sprintf("        const value = %s.filter[\"%s\"];\n", paramName, camelKey))
+					buf.WriteString(fmt.Sprintf("        queryString.append('%s', this.formatFilterValue(value));\n", queryParamName))
 					buf.WriteString("      }\n")
 				}
 			}
@@ -896,23 +972,9 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 	}
 
 	// Make the HTTP request
-	buf.WriteString("    options = this.context.setHttpRequestHeaders(options);\n")
-	buf.WriteString("    // Apply request interceptors\n")
-	buf.WriteString("    for (const interceptor of this.interceptors.request.interceptors) {\n")
-	buf.WriteString("      const result = await interceptor(options, finalUrl);\n")
-	buf.WriteString("      if (result) {\n")
-	buf.WriteString("        if (result.options) options = result.options;\n")
-	buf.WriteString("        if (result.url) finalUrl = result.url;\n")
-	buf.WriteString("      }\n")
-	buf.WriteString("    }\n\n")
-	buf.WriteString("    let response = await fetch(finalUrl, options);\n")
-	buf.WriteString("    // Apply response interceptors\n")
-	buf.WriteString("    for (const interceptor of this.interceptors.response.interceptors) {\n")
-	buf.WriteString("      const result = await interceptor(response, options, finalUrl);\n")
-	buf.WriteString("      if (result) {\n")
-	buf.WriteString("        response = result;\n")
-	buf.WriteString("      }\n")
-	buf.WriteString("    }\n\n")
+	buf.WriteString("    requestOptions = this.context.setHttpRequestHeaders(requestOptions);\n")
+	buf.WriteString("    const response = await this.executeRequest(finalUrl, requestOptions);\n")
+	buf.WriteString("\n")
 	buf.WriteString("    if (response.status === 204) {\n")
 	if methodDefinition.ResponseType == "void" {
 		buf.WriteString("      return;\n")
