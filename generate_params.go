@@ -425,6 +425,20 @@ func resolveType(schemaRef *openapi3.SchemaRef, doc *openapi3.T) (string, []stri
 		return tsType, additionalTypes
 	}
 
+	// Handle anyOf (union types)
+	if schema.AnyOf != nil && len(schema.AnyOf) > 0 {
+		tsTypes := []string{}
+		for _, anyOfSchema := range schema.AnyOf {
+			anyOfType, additional := resolveType(anyOfSchema, doc)
+			additionalTypes = append(additionalTypes, additional...)
+			tsTypes = append(tsTypes, anyOfType)
+		}
+		// Remove duplicate types
+		tsTypes = removeDuplicates(tsTypes)
+		// Join with | for union types
+		return strings.Join(tsTypes, " | "), additionalTypes
+	}
+
 	// Handle multiple types (union types)
 	if schema.Type != nil && len(*schema.Type) > 0 {
 		tsTypes := []string{}

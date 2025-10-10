@@ -165,8 +165,23 @@ func generateTypeScript(name string, schemaRef *openapi3.SchemaRef, doc *openapi
 				optional = false
 			}
 			nullable := false
-			if schema.Nullable {
-				nullable = true
+			if prop.Value != nil {
+				if prop.Value.Nullable {
+					nullable = true
+				}
+				// Check if null is in the type list (OpenAPI 3.0 style nullable)
+				if prop.Value.Type != nil {
+					for _, t := range *prop.Value.Type {
+						if strings.ToLower(t) == "null" {
+							nullable = true
+							break
+						}
+					}
+				}
+				// Check PermitsNull method
+				if prop.Value.PermitsNull() {
+					nullable = true
+				}
 			}
 
 			propType, _ := resolveType(prop, doc)
