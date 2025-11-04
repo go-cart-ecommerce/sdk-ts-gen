@@ -146,20 +146,22 @@ func generateTypeScript(name string, schemaRef *openapi3.SchemaRef, doc *openapi
 		var buf bytes.Buffer
 		buf.WriteString(fmt.Sprintf("export interface %s {\n", toPascalCase(name)))
 
-		// Collect property names to ensure consistent order
-		var propNames []string
-		for prop := range schema.Properties {
-			propNames = append(propNames, prop)
+		// PropertyInfo holds information about a property for sorting and output
+		type PropertyInfo struct {
+			camelName string
+			propType  string
+			optional  bool
+			nullable  bool
 		}
-		sort.Strings(propNames)
 
-		for _, propName := range propNames {
-			// Skip the _embedded property; we'll handle it separately
+		var allProps []PropertyInfo
+
+		// Collect regular properties (excluding _embedded)
+		for propName, prop := range schema.Properties {
 			if propName == "_embedded" {
 				continue
 			}
 
-			prop := schema.Properties[propName]
 			optional := true
 			if contains(schema.Required, propName) {
 				optional = false
@@ -185,18 +187,14 @@ func generateTypeScript(name string, schemaRef *openapi3.SchemaRef, doc *openapi
 			}
 
 			propType, _ := resolveType(prop, doc)
-
 			camelPropName := toCamelCase(propName)
 
-			if optional {
-				if nullable {
-					buf.WriteString(fmt.Sprintf("  %s?: %s | null;\n", camelPropName, propType))
-				} else {
-					buf.WriteString(fmt.Sprintf("  %s?: %s;\n", camelPropName, propType))
-				}
-			} else {
-				buf.WriteString(fmt.Sprintf("  %s: %s;\n", camelPropName, propType))
-			}
+			allProps = append(allProps, PropertyInfo{
+				camelName: camelPropName,
+				propType:  propType,
+				optional:  optional,
+				nullable:  nullable,
+			})
 		}
 
 		// Handle _embedded properties by promoting them to top-level
@@ -206,31 +204,45 @@ func generateTypeScript(name string, schemaRef *openapi3.SchemaRef, doc *openapi
 				return "", fmt.Errorf("failed to resolve embedded $ref for %s: %v", name, err)
 			}
 			embeddedSchema := embeddedSchemaResolved.Value
-			if embeddedSchema == nil {
-				return "", fmt.Errorf("embedded schema %s is nil", embeddedSchemaRef.Ref)
-			}
-
-			for embeddedPropName, embeddedProp := range embeddedSchema.Properties {
-				camelEmbeddedPropName := toCamelCase(embeddedPropName)
-				embeddedPropType, _ := resolveType(embeddedProp, doc)
-				optional := true
-				if contains(embeddedSchema.Required, embeddedPropName) {
-					optional = false
-				}
-
-				nullable := false
-				if embeddedProp.Value != nil && embeddedProp.Value.Nullable {
-					nullable = true
-				}
-				if optional {
-					if nullable {
-						buf.WriteString(fmt.Sprintf("  %s?: %s | null;\n", camelEmbeddedPropName, embeddedPropType))
-					} else {
-						buf.WriteString(fmt.Sprintf("  %s?: %s;\n", camelEmbeddedPropName, embeddedPropType))
+			if embeddedSchema != nil {
+				for embeddedPropName, embeddedProp := range embeddedSchema.Properties {
+					camelEmbeddedPropName := toCamelCase(embeddedPropName)
+					embeddedPropType, _ := resolveType(embeddedProp, doc)
+					optional := true
+					if contains(embeddedSchema.Required, embeddedPropName) {
+						optional = false
 					}
-				} else {
-					buf.WriteString(fmt.Sprintf("  %s: %s;\n", camelEmbeddedPropName, embeddedPropType))
+
+					nullable := false
+					if embeddedProp.Value != nil && embeddedProp.Value.Nullable {
+						nullable = true
+					}
+
+					allProps = append(allProps, PropertyInfo{
+						camelName: camelEmbeddedPropName,
+						propType:  embeddedPropType,
+						optional:  optional,
+						nullable:  nullable,
+					})
 				}
+			}
+		}
+
+		// Sort all properties alphabetically by camelCase name
+		sort.Slice(allProps, func(i, j int) bool {
+			return allProps[i].camelName < allProps[j].camelName
+		})
+
+		// Output all properties in alphabetical order
+		for _, propInfo := range allProps {
+			if propInfo.optional {
+				if propInfo.nullable {
+					buf.WriteString(fmt.Sprintf("  %s?: %s | null;\n", propInfo.camelName, propInfo.propType))
+				} else {
+					buf.WriteString(fmt.Sprintf("  %s?: %s;\n", propInfo.camelName, propInfo.propType))
+				}
+			} else {
+				buf.WriteString(fmt.Sprintf("  %s: %s;\n", propInfo.camelName, propInfo.propType))
 			}
 		}
 

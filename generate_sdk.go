@@ -790,7 +790,8 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 				}
 			}
 
-			// write it
+			// write it (sorted alphabetically)
+			sort.Strings(embeddedObjects)
 			var bufEmbedded bytes.Buffer
 			bufEmbedded.WriteString("[")
 			for i, eo := range embeddedObjects {
