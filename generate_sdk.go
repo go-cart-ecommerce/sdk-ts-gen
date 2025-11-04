@@ -22,14 +22,15 @@ type QueryParameter struct {
 }
 
 type MethodDefinition struct {
-	Name            string
-	Arguments       MethodArgumentDefinitions
-	ResponseType    string
-	HTTPMethod      string
-	Path            string
-	QueryParams     map[string][]QueryParameter
-	OperationRef    *openapi3.Operation
-	ResponseTypeRef *openapi3.SchemaRef
+	Name                string
+	Arguments           MethodArgumentDefinitions
+	ResponseType        string
+	ResponseContentType string // Tracks the actual content type (e.g., "text/html", "application/json")
+	HTTPMethod          string
+	Path                string
+	QueryParams         map[string][]QueryParameter
+	OperationRef        *openapi3.Operation
+	ResponseTypeRef     *openapi3.SchemaRef
 }
 
 type MethodDefinitions []MethodDefinition
@@ -221,17 +222,18 @@ func getMethodDefinitions(doc *openapi3.T) MethodDefinitions {
 			}
 
 			// Determine response type
-			responseType, ResponseTypeRef := determineResponseType(operation)
+			responseType, responseContentType, ResponseTypeRef := determineResponseType(operation)
 
 			methodDefinitions = append(methodDefinitions, MethodDefinition{
-				Name:            methodName,
-				HTTPMethod:      method,
-				Path:            path,
-				Arguments:       methodArgumentList,
-				ResponseType:    responseType,
-				QueryParams:     queryParams,
-				OperationRef:    operation,
-				ResponseTypeRef: ResponseTypeRef,
+				Name:                methodName,
+				HTTPMethod:          method,
+				Path:                path,
+				Arguments:           methodArgumentList,
+				ResponseType:        responseType,
+				ResponseContentType: responseContentType,
+				QueryParams:         queryParams,
+				OperationRef:        operation,
+				ResponseTypeRef:     ResponseTypeRef,
 			})
 		}
 	}
@@ -450,7 +452,7 @@ func extractParameters(operation *openapi3.Operation) map[string][]QueryParamete
 }
 
 // determineResponseType selects the appropriate response type from the operation's responses
-func determineResponseType(operation *openapi3.Operation) (string, *openapi3.SchemaRef) {
+func determineResponseType(operation *openapi3.Operation) (string, string, *openapi3.SchemaRef) {
 	// Prioritize 200, then 201, etc.
 	priority := []int{200, 201, 202, 204}
 
@@ -461,8 +463,14 @@ func determineResponseType(operation *openapi3.Operation) (string, *openapi3.Sch
 				// Check for binary content types first
 				for contentType := range respRef.Value.Content {
 					if isBinaryContentType(contentType) {
-						return "Blob", nil
+						return "Blob", contentType, nil
 					}
+				}
+
+				// Check for HTML content
+				if htmlContent, ok := respRef.Value.Content["text/html"]; ok && htmlContent.Schema != nil {
+					// HTML responses are always strings
+					return "string", "text/html", htmlContent.Schema
 				}
 
 				// Check for JSON content
@@ -470,10 +478,10 @@ func determineResponseType(operation *openapi3.Operation) (string, *openapi3.Sch
 					// Resolve schema reference if exists
 					schema := appJSON.Schema
 					if schema.Ref != "" {
-						return toPascalCase(getRefName(schema.Ref)), schema
+						return toPascalCase(getRefName(schema.Ref)), "application/json", schema
 					} else {
 						// Handle inline schemas or other types
-						return resolveInlineType(schema), schema
+						return resolveInlineType(schema), "application/json", schema
 					}
 				}
 			}
@@ -482,11 +490,11 @@ func determineResponseType(operation *openapi3.Operation) (string, *openapi3.Sch
 
 	// If no other success response is found, check for 204
 	if respRef := operation.Responses.Status(204); respRef != nil {
-		return "void", nil
+		return "void", "", nil
 	}
 
 	// Fallback to 'any' if no suitable response found
-	return "any", nil
+	return "any", "", nil
 }
 
 // isBinaryContentType checks if the content type represents binary data
@@ -994,6 +1002,10 @@ func generateMethod(doc *openapi3.T, methodDefinition MethodDefinition) string {
 		buf.WriteString("    // Handle binary response\n")
 		buf.WriteString("    const blob = await response.blob();\n")
 		buf.WriteString("    return blob;\n")
+	} else if methodDefinition.ResponseContentType == "text/html" {
+		buf.WriteString("    // Handle HTML response\n")
+		buf.WriteString("    const html = await response.text();\n")
+		buf.WriteString("    return html;\n")
 	} else {
 		buf.WriteString("    const data = await response.json();\n")
 		buf.WriteString("    // Transform keys to camelCase and recursively convert nested objects\n")

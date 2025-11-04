@@ -1,0 +1,72 @@
+openapi: 3.0.0
+info:
+  title: Test API
+  version: 1.0.0
+components:
+  schemas:
+    UpdateProductEmbedded:
+      type: object
+      properties:
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/UpdateProductOptionRequest'
+        attributes:
+          type: array
+          items:
+            $ref: '#/components/schemas/CreateUpdateAttributeValue'
+        category:
+          $ref: '#/components/schemas/ResourceID'
+        type:
+          $ref: '#/components/schemas/ResourceID'
+        tags:
+          nullable: true
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceID'
+        collections:
+          nullable: true
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceID'
+        poster:
+          $ref: '#/components/schemas/ResourceID'
+        media:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceID'
+        brand:
+          anyOf:
+            - $ref: '#/components/schemas/ResourceID'
+            - type: 'null'
+        materials:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceID'
+    UpdateProductOptionRequest:
+      type: object
+      properties:
+        name:
+          type: string
+    CreateUpdateAttributeValue:
+      type: object
+      properties:
+        value:
+          type: string
+    ResourceID:
+      type: object
+      properties:
+        id:
+          type: string
+paths:
+  /products:
+    patch:
+      operationId: updateProduct
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProductEmbedded'
+      responses:
+        '200':
+          description: Success

@@ -228,6 +228,7 @@ func TestBinaryContentTypeDetection(t *testing.T) {
 		{"CSV", "text/csv", true},
 		{"JSON", "application/json", false},
 		{"Plain Text", "text/plain", false},
+		{"HTML", "text/html", false},
 	}
 
 	for _, tt := range tests {
@@ -236,6 +237,289 @@ func TestBinaryContentTypeDetection(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestHTMLResponseGeneration(t *testing.T) {
+	// Create OpenAPI spec with HTML response
+	openAPISpec := `
+openapi: 3.0.0
+info:
+  title: Test API
+  version: 1.0.0
+paths:
+  /campaigns/v1/campaigns/{id}/preview:
+    get:
+      operationId: previewCampaignHTML
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: filter[lang]
+          schema:
+            type: string
+            enum:
+              - en
+              - sq
+        - in: query
+          name: filter[currency]
+          schema:
+            type: string
+            enum:
+              - ALL
+              - EUR
+              - USD
+      responses:
+        '200':
+          description: Campaign HTML preview
+          content:
+            text/html:
+              schema:
+                type: string
+                description: HTML content of the campaign email
+`
+
+	// Parse the OpenAPI spec
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData([]byte(openAPISpec))
+	assert.NoError(t, err)
+
+	// Generate SDK
+	sdkCode := generateSDK(doc, []TypeDefinition{}, []ParamDefinition{})
+	sdkString := string(sdkCode)
+
+	// Test that HTML response handling is included
+	assert.Contains(t, sdkString, "Promise<string>")
+	assert.Contains(t, sdkString, "response.text()")
+	assert.Contains(t, sdkString, "return html;")
+	assert.Contains(t, sdkString, "// Handle HTML response")
+
+	// Test that the method name is correct
+	assert.Contains(t, sdkString, "previewCampaignHTML")
+
+	// Test that HTML response uses text() instead of json() for success response
+	// (Note: response.json() is still used for error handling, which is correct)
+	htmlMethodStart := strings.Index(sdkString, "previewCampaignHTML")
+	assert.Greater(t, htmlMethodStart, -1, "Should contain previewCampaignHTML method")
+
+	// Find the HTML response handling section
+	htmlMethodCode := sdkString[htmlMethodStart:]
+	// Check that HTML response handling comes after error handling
+	htmlResponseIndex := strings.Index(htmlMethodCode, "// Handle HTML response")
+	errorHandlingIndex := strings.Index(htmlMethodCode, "if (!response.ok)")
+
+	assert.Greater(t, htmlResponseIndex, errorHandlingIndex, "HTML response handling should come after error handling")
+	assert.Contains(t, htmlMethodCode[htmlResponseIndex:], "response.text()", "HTML method should use response.text() for success")
+	assert.Contains(t, htmlMethodCode[htmlResponseIndex:], "return html;", "HTML method should return html")
+}
+
+func TestHTMLResponseTypeDetection(t *testing.T) {
+	// Create OpenAPI spec with HTML response
+	openAPISpec := `
+openapi: 3.0.0
+info:
+  title: Test API
+  version: 1.0.0
+paths:
+  /preview:
+    get:
+      operationId: getPreview
+      responses:
+        '200':
+          description: HTML preview
+          content:
+            text/html:
+              schema:
+                type: string
+`
+
+	// Parse the OpenAPI spec
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData([]byte(openAPISpec))
+	assert.NoError(t, err)
+
+	// Get method definitions
+	methodDefinitions := getMethodDefinitions(doc)
+	assert.Len(t, methodDefinitions, 1)
+
+	methodDef := methodDefinitions[0]
+	assert.Equal(t, "getPreview", methodDef.Name)
+	assert.Equal(t, "string", methodDef.ResponseType)
+	assert.Equal(t, "text/html", methodDef.ResponseContentType)
+}
+
+func TestMixedResponseTypesWithHTML(t *testing.T) {
+	// Create OpenAPI spec with JSON, HTML, and binary responses
+	openAPISpec := `
+openapi: 3.0.0
+info:
+  title: Test API
+  version: 1.0.0
+paths:
+  /items:
+    get:
+      operationId: listItems
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+  /campaigns/{id}/preview:
+    get:
+      operationId: previewCampaignHTML
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: HTML preview
+          content:
+            text/html:
+              schema:
+                type: string
+  /files/{id}/download:
+    get:
+      operationId: downloadFile
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: File download
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+`
+
+	// Parse the OpenAPI spec
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData([]byte(openAPISpec))
+	assert.NoError(t, err)
+
+	// Generate SDK
+	sdkCode := generateSDK(doc, []TypeDefinition{}, []ParamDefinition{})
+	sdkString := string(sdkCode)
+
+	// Test that all response types are handled
+	assert.Contains(t, sdkString, "response.json()")
+	assert.Contains(t, sdkString, "response.text()")
+	assert.Contains(t, sdkString, "response.blob()")
+	assert.Contains(t, sdkString, "return toClientType(data);")
+	assert.Contains(t, sdkString, "return html;")
+	assert.Contains(t, sdkString, "return blob;")
+
+	// Verify HTML response handling is correct
+	// Check that previewCampaignHTML method exists and has correct signature
+	assert.Contains(t, sdkString, "previewCampaignHTML")
+	assert.Contains(t, sdkString, "Promise<string>")
+
+	// Find the HTML response handling section relative to the method
+	htmlMethodIndex := strings.Index(sdkString, "previewCampaignHTML")
+	assert.Greater(t, htmlMethodIndex, -1, "Should contain previewCampaignHTML method")
+
+	// Get a large chunk after the method declaration to include the full method body
+	methodBodyStart := htmlMethodIndex
+	// Look for the HTML response handling comment after the method starts
+	htmlResponseCommentIndex := strings.Index(sdkString[methodBodyStart:], "// Handle HTML response")
+	assert.Greater(t, htmlResponseCommentIndex, -1, "Should contain HTML response handling comment")
+
+	// Verify the HTML response handling section
+	htmlResponseSection := sdkString[methodBodyStart+htmlResponseCommentIndex:]
+	assert.Contains(t, htmlResponseSection, "response.text()", "HTML response section should use response.text()")
+	assert.Contains(t, htmlResponseSection, "return html;", "HTML response section should return html")
+}
+
+func TestDetermineResponseTypeWithHTML(t *testing.T) {
+	// Create OpenAPI spec with HTML response
+	openAPISpec := `
+openapi: 3.0.0
+info:
+  title: Test API
+  version: 1.0.0
+paths:
+  /preview:
+    get:
+      operationId: getPreview
+      responses:
+        '200':
+          description: HTML preview
+          content:
+            text/html:
+              schema:
+                type: string
+                description: HTML content
+`
+
+	// Parse the OpenAPI spec
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData([]byte(openAPISpec))
+	assert.NoError(t, err)
+
+	// Get the operation
+	pathItem := doc.Paths.Find("/preview")
+	assert.NotNil(t, pathItem)
+	assert.NotNil(t, pathItem.Get)
+
+	operation := pathItem.Get
+
+	// Test determineResponseType
+	responseType, responseContentType, schemaRef := determineResponseType(operation)
+
+	assert.Equal(t, "string", responseType)
+	assert.Equal(t, "text/html", responseContentType)
+	assert.NotNil(t, schemaRef)
+}
+
+func TestHTMLResponsePriority(t *testing.T) {
+	// Test that HTML response is detected even when multiple content types are present
+	openAPISpec := `
+openapi: 3.0.0
+info:
+  title: Test API
+  version: 1.0.0
+paths:
+  /preview:
+    get:
+      operationId: getPreview
+      responses:
+        '200':
+          description: HTML preview
+          content:
+            text/html:
+              schema:
+                type: string
+            application/json:
+              schema:
+                type: object
+`
+
+	// Parse the OpenAPI spec
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData([]byte(openAPISpec))
+	assert.NoError(t, err)
+
+	// Get method definitions
+	methodDefinitions := getMethodDefinitions(doc)
+	assert.Len(t, methodDefinitions, 1)
+
+	methodDef := methodDefinitions[0]
+	// HTML should be detected before JSON (based on the order in determineResponseType)
+	// Since HTML is checked before JSON in the code, it should return HTML
+	assert.Equal(t, "string", methodDef.ResponseType)
+	assert.Equal(t, "text/html", methodDef.ResponseContentType)
 }
 
 func TestPrimitiveTypeDetection(t *testing.T) {
